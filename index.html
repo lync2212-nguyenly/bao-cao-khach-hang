@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>So sánh khách hàng theo dịch vụ & thời gian</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --paper:#F5F2EA;
+    --card:#FFFFFF;
+    --line:#E2DDCF;
+    --ink:#1E2620;
+    --ink-soft:#5B6459;
+    --navy:#132436;
+    --navy-soft:#243A50;
+    --p1:#2B4C7E;
+    --p1-soft:#EAF0F8;
+    --p2:#C97B2E;
+    --p2-soft:#FBF0E1;
+    --pos:#1F7A4D;
+    --pos-soft:#E9F5EE;
+    --neg:#B43C33;
+    --neg-soft:#FBEAE8;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    font-size:14px;
+    line-height:1.5;
+  }
+  h1,h2,h3{font-family:Georgia,"Times New Roman",serif; font-weight:600; margin:0;}
+  .mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;}
+  header.top{
+    background:linear-gradient(135deg,var(--navy) 0%, var(--navy-soft) 100%);
+    color:#F3EFE4;
+    padding:28px 32px 24px;
+  }
+  header.top h1{font-size:22px; letter-spacing:.2px;}
+  header.top .sub{margin-top:6px; font-size:13px; color:#B9C4CE; max-width:640px;}
+  .route{
+    display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:#CBD5DE;
+  }
+  .route .dot{width:8px;height:8px;border-radius:50%;background:#F3EFE4;flex:none;}
+  .route .line{flex:1; height:1px; background:repeating-linear-gradient(90deg,#8A99A6 0 6px, transparent 6px 12px); min-width:40px;}
+  .wrap{max-width:1320px; margin:0 auto; padding:22px 32px 60px;}
+
+  .upload-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:22px;}
+  .upload-card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px; position:relative;
+  }
+  .upload-card .tag{
+    display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-soft); margin-bottom:6px;
+  }
+  .upload-card h3{font-size:15px; margin-bottom:10px;}
+  .upload-card input[type=file]{ width:100%; font-size:12px;}
+  .upload-card .status{margin-top:10px; font-size:12px; color:var(--ink-soft);}
+  .upload-card .status.ok{color:var(--pos); font-weight:600;}
+  .upload-card .status.err{color:var(--neg); font-weight:600;}
+  .upload-card.k1{border-top:3px solid var(--p1);}
+  .upload-card.k2{border-top:3px solid var(--p2);}
+  .upload-card.map{border-top:3px solid var(--ink-soft);}
+
+  .panel{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:18px;}
+  .hidden{display:none !important;}
+
+  .summary-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px;}
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px;}
+  .stat .label{font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin-bottom:6px;}
+  .stat .val{font-size:20px; font-weight:700;}
+  .stat .val.p1{color:var(--p1);}
+  .stat .val.p2{color:var(--p2);}
+  .stat .delta{font-size:12px; margin-top:4px;}
+  .stat .delta.pos{color:var(--pos);}
+  .stat .delta.neg{color:var(--neg);}
+
+  .filters{display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; margin-bottom:6px;}
+  .filter-block{display:flex; flex-direction:column; gap:6px; min-width:160px;}
+  .filter-block label{font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft);}
+  .filter-block input[type=text], .filter-block input[type=date]{
+    padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:13px; background:#FCFBF8;
+  }
+  .chips{display:flex; flex-wrap:wrap; gap:6px; max-width:340px;}
+  .chip{
+    border:1px solid var(--line); background:#FCFBF8; padding:5px 10px; border-radius:999px; font-size:12px;
+    cursor:pointer; user-select:none; color:var(--ink-soft);
+  }
+  .chip.active{background:var(--navy); color:#fff; border-color:var(--navy);}
+
+  .tabs{display:flex; gap:6px; margin:20px 0 14px; border-bottom:1px solid var(--line);}
+  .tab-btn{
+    padding:9px 16px; font-size:13px; font-weight:600; color:var(--ink-soft); background:none; border:none;
+    cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
+  }
+  .tab-btn.active{color:var(--navy); border-bottom-color:var(--p2);}
+
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th, td{padding:8px 10px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap;}
+  th:first-child, td:first-child{text-align:left; white-space:normal;}
+  th{
+    font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft);
+    cursor:pointer; position:sticky; top:0; background:var(--card);
+  }
+  th.sorted{color:var(--navy);}
+  tbody tr:hover{background:#FAF8F2;}
+  tbody tr.customer-row{cursor:pointer;}
+  td.pos{color:var(--pos);}
+  td.neg{color:var(--neg);}
+  .grp-p1{background:var(--p1-soft);}
+  .grp-p2{background:var(--p2-soft);}
+  .table-scroll{max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:8px;}
+
+  .toolbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px; flex-wrap:wrap;}
+  button.btn{
+    background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:6px; font-size:12.5px;
+    cursor:pointer; font-weight:600;
+  }
+  button.btn.ghost{background:none; color:var(--navy); border:1px solid var(--navy);}
+  button.btn:hover{opacity:.88;}
+
+  .detail-row td{background:#FAF8F1; padding:0;}
+  .detail-inner{padding:10px 14px 16px 26px;}
+  .detail-inner table{font-size:12px;}
+  .empty-state{padding:40px 10px; text-align:center; color:var(--ink-soft); font-size:13px;}
+  .note{font-size:11.5px; color:var(--ink-soft); margin-top:8px;}
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--ink-soft); margin-bottom:10px;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .legend .sw{width:10px;height:10px;border-radius:2px;display:inline-block;}
+  #printReportArea{display:none;}
+  @media print{
+    body.printing-report > *:not(#printReportArea){display:none !important;}
+    body.printing-report #printReportArea{display:block !important; font-family:Georgia,"Times New Roman",serif; color:#111; padding:20px;}
+    body.printing-report #printReportArea table{width:100%; border-collapse:collapse; font-size:11px; margin-bottom:18px;}
+    body.printing-report #printReportArea th, body.printing-report #printReportArea td{border:1px solid #999; padding:5px 7px;}
+    body.printing-report #printReportArea h2{font-size:14px; margin-top:20px;}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>So sánh khách hàng theo dịch vụ &amp; thời gian</h1>
+  <div class="sub">Ghép dữ liệu đơn hàng với danh mục dịch vụ, so sánh doanh thu (TongCuoc) theo khách hàng (MaKhachHangTCT), dịch vụ và bưu cục gửi (BuuCucGoi) giữa hai kỳ. Toàn bộ xử lý diễn ra ngay trên trình duyệt — dữ liệu không được gửi lên máy chủ nào.</div>
+  <div class="route"><div class="dot"></div><div class="line"></div><span id="routeLabel" class="mono">Chưa nạp dữ liệu</span><div class="line"></div><div class="dot"></div></div>
+</header>
+
+<div class="wrap">
+
+  <div class="upload-grid" style="grid-template-columns:1fr 2fr;">
+    <div class="upload-card map">
+      <div class="tag">Danh mục dịch vụ</div>
+      <h3>File "Ma dich vu"</h3>
+      <input type="file" id="fileMap" accept=".xlsb,.xlsx,.xls">
+      <div class="status" id="statusMap">Chưa chọn file</div>
+    </div>
+    <div class="upload-card k1">
+      <div class="tag" style="color:var(--p1)">Dữ liệu đơn hàng</div>
+      <h3>File dữ liệu (chọn được nhiều file cùng lúc)</h3>
+      <input type="file" id="fileData" accept=".xlsb,.xlsx,.xls" multiple>
+      <div class="status" id="statusData">Chưa chọn file — có thể chọn nhiều file (nhiều tháng/tuần) cùng lúc, giữ Ctrl khi chọn</div>
+      <div id="dataFilesList" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
+      <div id="archiveFilesList" class="hidden" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <div class="summary-grid" id="summaryGrid"></div>
+
+    <div class="panel" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <div>
+        <h3 style="font-size:15px;">Xuất báo cáo tổng thể</h3>
+        <div class="note" style="margin-top:2px;">Gồm: Tổng quan, Theo khách hàng, Theo nhóm dịch vụ, Theo bưu cục gửi — theo đúng bộ lọc đang áp dụng.</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn ghost" id="btnExportExcel">Xuất Excel (.xlsx)</button>
+        <button class="btn ghost" id="btnExportWord">Xuất Word (.doc)</button>
+        <button class="btn" id="btnExportPdf">Xuất PDF (in báo cáo)</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="filters">
+        <div class="filter-block">
+          <label>Tìm khách hàng (MaKhachHangTCT)</label>
+          <input type="text" id="fSearch" placeholder="Nhập mã khách hàng...">
+        </div>
+        <div class="filter-block">
+          <label style="color:var(--p1)">Kỳ 1 — từ ngày</label>
+          <input type="date" id="fP1From">
+        </div>
+        <div class="filter-block">
+          <label style="color:var(--p1)">Kỳ 1 — đến ngày</label>
+          <input type="date" id="fP1To">
+        </div>
+        <div class="filter-block">
+          <label style="color:var(--p2)">Kỳ 2 — từ ngày</label>
+          <input type="date" id="fP2From">
+        </div>
+        <div class="filter-block">
+          <label style="color:var(--p2)">Kỳ 2 — đến ngày</label>
+          <input type="date" id="fP2To">
+        </div>
+        <div class="filter-block">
+          <label>Nhóm dịch vụ</label>
+          <div class="chips" id="chipsNhom"></div>
+        </div>
+        <div class="filter-block">
+          <label>Bưu cục gửi</label>
+          <div class="chips" id="chipsBuuCuc"></div>
+        </div>
+        <div class="filter-block">
+          <button class="btn ghost" id="btnReset">Xoá bộ lọc</button>
+        </div>
+      </div>
+      <div class="note">Có thể nạp bao nhiêu file dữ liệu cũng được (theo tháng, theo tuần...) — tất cả sẽ gộp thành 1 kho chung. Kỳ 1 / Kỳ 2 chỉ là 2 khoảng ngày bạn chọn để so sánh trong kho đó, không phụ thuộc dữ liệu đến từ file nào.</div>
+    </div>
+
+    <div class="panel" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <div>
+        <h3 style="font-size:15px;">Danh sách khách hàng lớn (KHL)</h3>
+        <div class="note" style="margin-top:2px;">Tải file danh sách KHL để đối chiếu doanh thu thực tế của từng khách hàng lớn theo Kỳ 1 / Kỳ 2 (tuỳ chọn).</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <input type="file" id="fileKhl" accept=".xlsb,.xlsx,.xls,.csv">
+        <div class="status" id="statusKhl">Chưa chọn file</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="customer">Theo khách hàng</button>
+      <button class="tab-btn" data-tab="service">Theo dịch vụ</button>
+      <button class="tab-btn" data-tab="buucuc">Theo bưu cục gửi</button>
+      <button class="tab-btn" data-tab="khl">Khách hàng lớn</button>
+    </div>
+
+    <div class="panel" id="tabPanel">
+      <div class="filters hidden" id="customerSubFilters" style="margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--line);">
+        <div class="filter-block">
+          <label>Biến động giữa 2 kỳ</label>
+          <div class="chips" id="chipsClassify"></div>
+        </div>
+        <div class="filter-block">
+          <label>Doanh thu tối thiểu</label>
+          <input type="text" id="fRevMin" placeholder="0" inputmode="numeric">
+        </div>
+        <div class="filter-block">
+          <label>Doanh thu tối đa</label>
+          <input type="text" id="fRevMax" placeholder="Không giới hạn" inputmode="numeric">
+        </div>
+        <div class="filter-block">
+          <label>&nbsp;</label>
+          <button class="btn ghost" id="btnResetClassify">Xoá lọc biến động</button>
+        </div>
+      </div>
+      <div id="classifySummary" class="summary-grid hidden" style="margin-bottom:16px;"></div>
+      <div class="filters hidden" id="serviceSubFilters" style="margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid var(--line);">
+        <div class="filter-block">
+          <label>Mức hiển thị</label>
+          <div class="chips" id="chipsServiceView"></div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="legend" id="legendBox"></div>
+        <button class="btn" id="btnExport">Xuất CSV</button>
+      </div>
+      <div class="table-scroll"><table id="mainTable"></table></div>
+      <div class="note" id="footNote"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+const state = {
+  mapping: null,      // Map: maloai -> {ten, nhom}
+  dataFiles: [],       // [{filename, rows}] - có thể nhiều file, tất cả gộp thành 1 kho dữ liệu chung
+  khl: null,            // Map: MaKhachHangTCT -> {các cột phụ từ file danh sách KHL}
+  khlColumns: [],        // tên các cột phụ (ngoài mã KH) trong file KHL, để hiển thị động
+  filters: { search:'', p1From:null, p1To:null, p2From:null, p2To:null, dateTouched:false, nhom:new Set(), buucuc:new Set(), classify:new Set(['new','churn','growth','decline','flat']), revMin:null, revMax:null },
+  allNhom: [],
+  allBuuCuc: [],
+  tab: 'customer',
+  serviceView: 'group',
+  sort: { key:'p1_rev', dir:-1 },
+  expanded: new Set()
+};
+
+function setStatus(id, text, cls){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'status' + (cls ? ' '+cls : '');
+}
+
+// Parsing runs in a background Web Worker so large .xlsb/.xlsx files
+// never freeze the page (avoids the "Trang không phản hồi" browser dialog).
+// For data files, only the 6 needed columns are extracted (not all 49),
+// which is much faster and lighter for large files.
+const WORKER_CODE = `
+  self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+  self.onmessage = function(e){
+    try{
+      const {buf, columns} = e.data;
+      const wb = XLSX.read(buf, {type:'array', dense:true});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if(columns){
+        const aoa = XLSX.utils.sheet_to_json(sheet, {header:1, raw:true, defval:null});
+        if(aoa.length === 0){ postMessage({ok:true, rows:[]}); return; }
+        const header = aoa[0].map(h => (h===null||h===undefined) ? '' : String(h).trim());
+        const idx = {};
+        columns.forEach(c => { idx[c] = header.indexOf(c); });
+        const rows = new Array(aoa.length - 1);
+        for(let i=1; i<aoa.length; i++){
+          const line = aoa[i];
+          const obj = {};
+          for(let k=0;k<columns.length;k++){
+            const c = columns[k], j = idx[c];
+            obj[c] = (j>=0 && j<line.length) ? line[j] : null;
+          }
+          rows[i-1] = obj;
+        }
+        postMessage({ok:true, rows});
+      } else {
+        const rows = XLSX.utils.sheet_to_json(sheet, {defval:null});
+        postMessage({ok:true, rows});
+      }
+    }catch(err){
+      postMessage({ok:false, error: (err && err.message) ? err.message : String(err)});
+    }
+  };
+`;
+const WORKER_URL = URL.createObjectURL(new Blob([WORKER_CODE], {type:'application/javascript'}));
+const DATA_COLUMNS = ['MaKhachHangTCT','HoTenNguoiGoi','BuuCucGoi','MaDichVu','MaLoai','TongCuoc','NgayPH'];
+
+function parseFileRows(fileOrBuffer, columns){
+  return new Promise((resolve, reject)=>{
+    const bufPromise = (fileOrBuffer instanceof ArrayBuffer) ? Promise.resolve(fileOrBuffer) : fileOrBuffer.arrayBuffer();
+    bufPromise.then(buf=>{
+      const worker = new Worker(WORKER_URL);
+      worker.onmessage = (e)=>{
+        worker.terminate();
+        if(e.data.ok) resolve(e.data.rows);
+        else reject(new Error(e.data.error));
+      };
+      worker.onerror = (err)=>{
+        worker.terminate();
+        reject(new Error(err.message || 'Lỗi không xác định khi đọc file'));
+      };
+      worker.postMessage({buf, columns: columns || null}, [buf]);
+    }).catch(reject);
+  });
+}
+
+function ngayPHtoDate(v){
+  const s = String(v).trim();
+  if(s.length !== 8) return null;
+  const y = s.slice(0,4), m = s.slice(4,6), d = s.slice(6,8);
+  return `${y}-${m}-${d}`;
+}
+
+async function processMappingRows(rows, displayName, statusId){
+  const map = new Map();
+  let colMaloai=null, colTen=null, colNhom=null;
+  if(rows.length){
+    const keys = Object.keys(rows[0]);
+    colMaloai = keys.find(k=>k.toLowerCase().replace(/\s/g,'')==='maloai');
+    colTen = keys.find(k=>k.toLowerCase().includes('tên dịch vụ') || k.toLowerCase().includes('ten dich vu'));
+    colNhom = keys.find(k=>k.toLowerCase().includes('nhóm dịch vụ') || k.toLowerCase().includes('nhom dich vu'));
+  }
+  rows.forEach(r=>{
+    const key = (r[colMaloai]||'').toString().trim().toUpperCase();
+    if(!key) return;
+    map.set(key, { ten: r[colTen] || '(Chưa đặt tên)', nhom: r[colNhom] || 'Khác' });
+  });
+  state.mapping = map;
+  state.filters.nhom = new Set();
+  setStatus(statusId, `Đã nạp ${map.size} mã dịch vụ (${displayName})`, 'ok');
+  tryRender();
+}
+
+document.getElementById('fileMap').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  setStatus('statusMap', 'Đang xử lý (không đóng tab)...');
+  try{
+    const rows = await parseFileRows(file);
+    await processMappingRows(rows, file.name, 'statusMap');
+  }catch(err){
+    console.error(err);
+    setStatus('statusMap', 'Lỗi đọc file: ' + err.message, 'err');
+  }
+});
+
+async function processDataRows(rows, displayName, statusId){
+  const parsed = rows.map(r=>{
+    const dateStr = ngayPHtoDate(r['NgayPH']);
+    const rawCust = r['MaKhachHangTCT'];
+    const cust = (rawCust===null || rawCust===undefined || String(rawCust).trim()==='') ? '(Không có mã KH)' : String(rawCust).trim();
+    const maloai = (r['MaLoai']||'').toString().trim().toUpperCase();
+    const buucuc = (r['BuuCucGoi']===null||r['BuuCucGoi']===undefined) ? '(Không rõ)' : String(r['BuuCucGoi']).trim();
+    const hoTen = (r['HoTenNguoiGoi']===null||r['HoTenNguoiGoi']===undefined||String(r['HoTenNguoiGoi']).trim()==='') ? '(Chưa rõ tên)' : String(r['HoTenNguoiGoi']).trim();
+    const tongCuoc = Number(r['TongCuoc']) || 0;
+    return { cust, maloai, buucuc, hoTen, tongCuoc, date: dateStr };
+  }).filter(r=>r.date);
+
+  // nạp lại file trùng tên sẽ THAY THẾ file cũ (dùng để cập nhật số liệu), không tạo bản trùng
+  const existingIdx = state.dataFiles.findIndex(f=>f.filename===displayName);
+  const entry = { filename: displayName, rows: parsed };
+  if(existingIdx>=0) state.dataFiles[existingIdx] = entry;
+  else state.dataFiles.push(entry);
+
+  setStatus(statusId, `Đã nạp ${parsed.length} dòng đơn hàng (${displayName})`, 'ok');
+  renderDataFilesList();
+  tryRender();
+}
+
+function renderDataFilesList(){
+  const box = document.getElementById('dataFilesList');
+  if(state.dataFiles.length===0){ box.innerHTML=''; return; }
+  box.innerHTML = state.dataFiles.map((f,i)=>{
+    const dates = f.rows.map(r=>r.date).filter(Boolean).sort();
+    const range = dates.length ? `${dates[0]} → ${dates[dates.length-1]}` : '(không có ngày hợp lệ)';
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12.5px; background:#FAF8F2; border:1px solid var(--line); border-radius:6px; padding:6px 10px;">
+      <span><b>${f.filename}</b> — ${f.rows.length} dòng — ${range}</span>
+      <button class="btn ghost" style="padding:3px 9px; font-size:11px;" onclick="removeDataFile(${i})">Xoá</button>
+    </div>`;
+  }).join('');
+}
+
+function removeDataFile(i){
+  state.dataFiles.splice(i,1);
+  renderDataFilesList();
+  if(state.dataFiles.length===0){
+    document.getElementById('app').classList.add('hidden');
+    setStatus('statusData', 'Chưa chọn file — có thể chọn nhiều file (nhiều tháng/tuần) cùng lúc, giữ Ctrl khi chọn');
+  } else {
+    tryRender();
+  }
+}
+
+async function handleDataFiles(fileList, statusId){
+  const files = Array.from(fileList);
+  for(const file of files){
+    setStatus(statusId, `Đang xử lý ${file.name} (file lớn có thể mất chút thời gian, không đóng tab)...`);
+    try{
+      const rows = await parseFileRows(file, DATA_COLUMNS);
+      await processDataRows(rows, file.name, statusId);
+    }catch(err){
+      console.error(err);
+      setStatus(statusId, `Lỗi đọc file ${file.name}: ` + err.message, 'err');
+    }
+  }
+}
+
+document.getElementById('fileData').addEventListener('change', (e)=>{
+  handleDataFiles(e.target.files, 'statusData');
+  e.target.value = ''; // cho phép chọn lại đúng file đó lần sau để cập nhật
+});
+
+// ===================== TỰ ĐỘNG TẢI DỮ LIỆU KHI ĐƯỢC HOST (không cần chọn file) =====================
+// Khi trang này được đặt lên một địa chỉ web (vd: GitHub Pages), đặt cùng thư mục:
+//   - ma-dich-vu.xlsb (bắt buộc)
+//   - danh-sach-file.json — có 2 cách viết:
+//       1) Mảng đơn giản (tự tải hết): ["thang-06-2026.xlsb","thang-07-2026.xlsb"]
+//       2) Có phân "cửa sổ trượt" để trang luôn mở nhanh dù tích luỹ nhiều tháng:
+//          { "auto": ["thang-07-2026.xlsb","thang-08-2026.xlsb"],
+//            "archive": ["thang-01-2026.xlsb","thang-02-2026.xlsb", ...] }
+//          "auto": các file này được TỰ ĐỘNG tải khi mở trang.
+//          "archive": các file cũ hơn KHÔNG tự tải (giữ trang nhẹ) — chỉ hiện đường link để
+//                     ai cần xem xa hơn có thể tải riêng file đó về rồi dùng nút "Chọn tệp".
+// Nếu không tìm thấy các file này (vd: đang mở trực tiếp từ máy), công cụ giữ nguyên chế độ chọn file thủ công.
+async function tryAutoLoadFromServer(){
+  async function fetchIfExists(name, asJson){
+    try{
+      const res = await fetch(name, {cache:'no-store'});
+      if(!res.ok) return null;
+      return asJson ? await res.json() : await res.arrayBuffer();
+    }catch(err){ return null; }
+  }
+
+  const mapBuf = await fetchIfExists('ma-dich-vu.xlsb');
+  if(mapBuf){
+    setStatus('statusMap', 'Đang tự động tải từ máy chủ...');
+    try{
+      const rows = await parseFileRows(mapBuf);
+      await processMappingRows(rows, 'ma-dich-vu.xlsb (tự động)', 'statusMap');
+    }catch(err){ setStatus('statusMap', 'Lỗi tự động tải: ' + err.message, 'err'); }
+  }
+
+  const manifest = await fetchIfExists('danh-sach-file.json', true);
+  let autoList = [];
+  let archiveList = [];
+  if(Array.isArray(manifest)) autoList = manifest;
+  else if(manifest && typeof manifest === 'object'){
+    autoList = Array.isArray(manifest.auto) ? manifest.auto : [];
+    archiveList = Array.isArray(manifest.archive) ? manifest.archive : [];
+  }
+
+  for(const name of autoList){
+    const buf = await fetchIfExists(name);
+    if(!buf) continue;
+    setStatus('statusData', `Đang tự động tải ${name} từ máy chủ...`);
+    try{
+      const rows = await parseFileRows(buf, DATA_COLUMNS);
+      await processDataRows(rows, name + ' (tự động)', 'statusData');
+    }catch(err){ setStatus('statusData', `Lỗi tự động tải ${name}: ` + err.message, 'err'); }
+  }
+
+  renderArchiveList(archiveList);
+}
+
+function renderArchiveList(archiveList){
+  const box = document.getElementById('archiveFilesList');
+  if(!archiveList || archiveList.length===0){ box.classList.add('hidden'); box.innerHTML=''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="note" style="margin-bottom:6px;">Kho lưu trữ (không tự tải, để trang luôn mở nhanh) — bấm để tải file cũ về máy, rồi dùng nút "Chọn tệp..." ở trên để xem lại:</div>` +
+    archiveList.map(name=>`<a href="${name}" download style="display:inline-block; margin:2px 6px 2px 0; font-size:12px; color:var(--navy); text-decoration:underline;">${name}</a>`).join('');
+}
+tryAutoLoadFromServer();
+
+function enrich(row){
+  const info = state.mapping ? state.mapping.get(row.maloai) : null;
+  return {
+    ...row,
+    ten: info ? info.ten : '(Chưa xác định)',
+    nhom: info ? info.nhom : 'Chưa xác định'
+  };
+}
+
+function getMergedRows(){
+  return state.dataFiles.flatMap(f=>f.rows).map(enrich);
+}
+
+function tryRender(){
+  if(!state.mapping || state.dataFiles.length===0) return;
+  document.getElementById('app').classList.remove('hidden');
+
+  const allRows = getMergedRows();
+
+  state.allNhom = [...new Set(allRows.map(r=>r.nhom))].sort();
+  state.allBuuCuc = [...new Set(allRows.map(r=>r.buucuc))].sort();
+  if(state.filters.nhom.size===0) state.allNhom.forEach(n=>state.filters.nhom.add(n));
+  if(state.filters.buucuc.size===0) state.allBuuCuc.forEach(b=>state.filters.buucuc.add(b));
+
+  const uniq = [...new Set(allRows.map(r=>r.date))].sort();
+  if(!state.filters.dateTouched){
+    if(uniq.length <= 1){
+      state.filters.p1From = state.filters.p1To = uniq[0];
+      state.filters.p2From = state.filters.p2To = uniq[0];
+    } else {
+      const mid = Math.ceil(uniq.length/2);
+      state.filters.p1From = uniq[0];
+      state.filters.p1To = uniq[mid-1];
+      state.filters.p2From = uniq[mid];
+      state.filters.p2To = uniq[uniq.length-1];
+    }
+  }
+  document.getElementById('fP1From').value = state.filters.p1From;
+  document.getElementById('fP1To').value = state.filters.p1To;
+  document.getElementById('fP2From').value = state.filters.p2From;
+  document.getElementById('fP2To').value = state.filters.p2To;
+
+  document.getElementById('routeLabel').textContent =
+    `${state.dataFiles.length} file dữ liệu (${allRows.length} dòng)  ·  Kỳ 1: ${state.filters.p1From} → ${state.filters.p1To}   ⇄   Kỳ 2: ${state.filters.p2From} → ${state.filters.p2To}`;
+
+  renderChips('chipsNhom', state.allNhom, state.filters.nhom);
+  renderChips('chipsBuuCuc', state.allBuuCuc, state.filters.buucuc);
+  renderClassifyChips();
+  document.getElementById('customerSubFilters').classList.toggle('hidden', state.tab!=='customer');
+  document.getElementById('classifySummary').classList.toggle('hidden', state.tab!=='customer');
+
+  renderAll();
+}
+
+function renderChips(containerId, values, selectedSet){
+  const box = document.getElementById(containerId);
+  box.innerHTML = '';
+  values.forEach(v=>{
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (selectedSet.has(v) ? ' active' : '');
+    chip.textContent = v;
+    chip.onclick = ()=>{
+      if(selectedSet.has(v)) selectedSet.delete(v); else selectedSet.add(v);
+      chip.classList.toggle('active');
+      renderAll();
+    };
+    box.appendChild(chip);
+  });
+}
+
+['fSearch'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', (e)=>{
+    state.filters.search = e.target.value.trim().toUpperCase();
+    renderAll();
+  });
+});
+document.getElementById('fP1From').addEventListener('change', e=>{ state.filters.p1From = e.target.value; state.filters.dateTouched = true; renderAll(); });
+document.getElementById('fP1To').addEventListener('change', e=>{ state.filters.p1To = e.target.value; state.filters.dateTouched = true; renderAll(); });
+document.getElementById('fP2From').addEventListener('change', e=>{ state.filters.p2From = e.target.value; state.filters.dateTouched = true; renderAll(); });
+document.getElementById('fP2To').addEventListener('change', e=>{ state.filters.p2To = e.target.value; state.filters.dateTouched = true; renderAll(); });
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  state.filters.search=''; document.getElementById('fSearch').value='';
+  state.filters.dateTouched = false;
+  state.allNhom.forEach(n=>state.filters.nhom.add(n));
+  state.allBuuCuc.forEach(b=>state.filters.buucuc.add(b));
+  renderChips('chipsNhom', state.allNhom, state.filters.nhom);
+  renderChips('chipsBuuCuc', state.allBuuCuc, state.filters.buucuc);
+  tryRender();
+});
+
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.tab = btn.dataset.tab;
+    state.sort = { key: 'p1_rev', dir:-1 };
+    document.getElementById('customerSubFilters').classList.toggle('hidden', state.tab!=='customer');
+    document.getElementById('classifySummary').classList.toggle('hidden', state.tab!=='customer');
+    document.getElementById('serviceSubFilters').classList.toggle('hidden', state.tab!=='service');
+    renderAll();
+  });
+});
+
+function renderServiceViewChips(){
+  const box = document.getElementById('chipsServiceView');
+  box.innerHTML = '';
+  [['group','Theo nhóm dịch vụ (TT / TMĐT / HCC / QT)'], ['detail','Chi tiết từng dịch vụ']].forEach(([key,label])=>{
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (state.serviceView===key ? ' active' : '');
+    chip.textContent = label;
+    chip.onclick = ()=>{
+      state.serviceView = key;
+      renderServiceViewChips();
+      renderAll();
+    };
+    box.appendChild(chip);
+  });
+}
+renderServiceViewChips();
+
+// ===================== KHÁCH HÀNG LỚN (KHL) =====================
+document.getElementById('fileKhl').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  setStatus('statusKhl', 'Đang xử lý...');
+  try{
+    const rows = await parseFileRows(file);
+    if(rows.length===0){ setStatus('statusKhl','File rỗng hoặc không đọc được dữ liệu','err'); return; }
+    const keys = Object.keys(rows[0]);
+    const custKey = keys.find(k=>{
+      const kk = k.toLowerCase().replace(/\s/g,'');
+      return kk.includes('makhachhang') || kk==='makh' || kk==='makhtct';
+    }) || keys[0];
+    const otherKeys = keys.filter(k=>k!==custKey);
+
+    const map = new Map();
+    rows.forEach(r=>{
+      const code = (r[custKey]===null||r[custKey]===undefined) ? '' : String(r[custKey]).trim();
+      if(!code) return;
+      const extra = {};
+      otherKeys.forEach(k=> extra[k] = r[k]);
+      map.set(code, extra);
+    });
+    state.khl = map;
+    state.khlColumns = otherKeys;
+    setStatus('statusKhl', `Đã nạp ${map.size} khách hàng lớn (${file.name}) — cột mã KH nhận diện: "${custKey}"`, 'ok');
+    if(state.dataFiles.length>0) renderAll();
+  }catch(err){
+    console.error(err);
+    setStatus('statusKhl', 'Lỗi đọc file: ' + err.message, 'err');
+  }
+});
+
+function renderKhlTab(p1Filtered, p2Filtered){
+  const table = document.getElementById('mainTable');
+  document.getElementById('classifySummary').classList.add('hidden');
+
+  if(!state.khl){
+    table.innerHTML = `<tbody><tr><td><div class="empty-state">Chưa tải danh sách khách hàng lớn (KHL). Tải file lên ở khung "Danh sách khách hàng lớn" phía trên để xem đối chiếu tại đây.</div></td></tr></tbody>`;
+    document.getElementById('footNote').textContent = '';
+    document.getElementById('legendBox').innerHTML = '';
+    window.__exportRows = { type:'khl', rows:[], hasP2:true, hasClassify:true };
+    return;
+  }
+
+  const attrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
+  const combined = buildCombined(p1Filtered, p2Filtered, r=>r.cust);
+  const combinedMap = new Map(combined.map(r=>[r.key, r]));
+
+  const khlRows = [...state.khl.entries()].map(([code, extra])=>{
+    const stat = combinedMap.get(code);
+    const base = stat || { key:code, p1_orders:0, p1_rev:0, p2_orders:0, p2_rev:0, delta_rev:0 };
+    const attrs = attrMap.get(code);
+    return {
+      key: code,
+      extra,
+      hoTen: (attrs && attrs.hoTen) || (extra && (extra['HoTenNguoiGoi']||extra['Ten']||extra['TenKhachHang'])) || '',
+      buucucRep: (attrs && attrs.buucuc) || '',
+      p1_orders: base.p1_orders, p1_rev: base.p1_rev,
+      p2_orders: base.p2_orders, p2_rev: base.p2_rev,
+      delta_rev: base.delta_rev,
+      classify: stat ? classifyCustomer(base) : null,
+      phatSinh: !!stat && (base.p1_orders>0 || base.p2_orders>0)
+    };
+  });
+
+  const rows = sortRows2(khlRows, 'p1_rev');
+  const found = khlRows.filter(r=>r.phatSinh).length;
+  const totalRevKhl1 = khlRows.reduce((a,r)=>a+r.p1_rev,0);
+  const totalRevKhl2 = khlRows.reduce((a,r)=>a+r.p2_rev,0);
+  const totalRevAll1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const totalRevAll2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+
+  const extraCols = state.khlColumns.filter(c=>{
+    const kk = c.toLowerCase().replace(/\s/g,'');
+    return !kk.includes('hotennguoigoi') && !kk.includes('buucuc'); // tránh trùng với 2 cột đã có
+  });
+
+  document.getElementById('legendBox').innerHTML = `
+    <span><b>${found}/${khlRows.length}</b> khách hàng lớn có phát sinh trong kỳ lọc hiện tại</span>
+    <span style="color:var(--ink-soft)">Đóng góp: Kỳ 1 ${totalRevAll1? ((totalRevKhl1/totalRevAll1)*100).toFixed(1):0}% · Kỳ 2 ${totalRevAll2? ((totalRevKhl2/totalRevAll2)*100).toFixed(1):0}% tổng doanh thu</span>
+  `;
+
+  const colCount = 8 + extraCols.length;
+  table.innerHTML = `
+    <thead><tr>
+      ${headerCell('Mã khách hàng', 'key')}
+      <th>Họ tên người gửi</th>
+      <th>Bưu cục gửi</th>
+      ${extraCols.map(c=>`<th>${c}</th>`).join('')}
+      ${headerCell('Doanh thu Kỳ 1', 'p1_rev')}
+      ${headerCell('Doanh thu Kỳ 2', 'p2_rev')}
+      ${headerCell('Chênh lệch', 'delta_rev')}
+      <th>Biến động</th>
+      <th>Trạng thái</th>
+    </tr></thead>
+    <tbody>
+    ${rows.map(r=>`
+      <tr>
+        <td>${r.key}</td>
+        <td>${r.hoTen}</td>
+        <td>${r.buucucRep}</td>
+        ${extraCols.map(c=>`<td>${r.extra[c]===null||r.extra[c]===undefined?'':r.extra[c]}</td>`).join('')}
+        <td class="mono">${fmtNum(r.p1_rev)}</td>
+        <td class="mono">${fmtNum(r.p2_rev)}</td>
+        <td class="mono ${r.delta_rev>=0?'pos':'neg'}">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>
+        <td style="color:${r.classify?CLASSIFY_COLORS[r.classify]:'var(--ink-soft)'}; font-weight:600;">${r.classify?CLASSIFY_LABELS[r.classify]:'—'}</td>
+        <td style="color:${r.phatSinh?'var(--pos)':'var(--neg)'}; font-weight:600;">${r.phatSinh?'Có phát sinh':'Không phát sinh'}</td>
+      </tr>`).join('')}
+    </tbody>
+  `;
+  attachSort();
+  document.getElementById('footNote').textContent = `${khlRows.length} khách hàng lớn trong danh sách đã tải. "Không phát sinh" nghĩa là khách hàng này không có đơn hàng nào trong khoảng ngày/bộ lọc hiện tại.`;
+  window.__exportRows = { type:'khl', rows, hasP2:true, hasClassify:true, extraCols };
+}
+
+document.getElementById('fRevMin').addEventListener('input', e=>{ state.filters.revMin = parseNum(e.target.value); renderAll(); });
+document.getElementById('fRevMax').addEventListener('input', e=>{ state.filters.revMax = parseNum(e.target.value); renderAll(); });
+document.getElementById('btnResetClassify').addEventListener('click', ()=>{
+  state.filters.classify = new Set(['new','churn','growth','decline','flat']);
+  state.filters.revMin = null; state.filters.revMax = null;
+  document.getElementById('fRevMin').value = '';
+  document.getElementById('fRevMax').value = '';
+  renderClassifyChips();
+  renderAll();
+});
+
+function renderClassifyChips(){
+  const box = document.getElementById('chipsClassify');
+  box.innerHTML = '';
+  ['new','growth','decline','churn','flat'].forEach(key=>{
+    const chip = document.createElement('div');
+    chip.className = 'chip' + (state.filters.classify.has(key) ? ' active' : '');
+    chip.textContent = CLASSIFY_LABELS[key];
+    chip.onclick = ()=>{
+      if(state.filters.classify.has(key)) state.filters.classify.delete(key); else state.filters.classify.add(key);
+      chip.classList.toggle('active');
+      renderAll();
+    };
+    box.appendChild(chip);
+  });
+}
+
+function passFiltersFor(period){
+  const from = period==='p1' ? state.filters.p1From : state.filters.p2From;
+  const to = period==='p1' ? state.filters.p1To : state.filters.p2To;
+  return function(row){
+    if(row.date < from || row.date > to) return false;
+    if(!state.filters.nhom.has(row.nhom)) return false;
+    if(!state.filters.buucuc.has(row.buucuc)) return false;
+    if(state.filters.search && !row.cust.toUpperCase().includes(state.filters.search)) return false;
+    return true;
+  };
+}
+
+const CLASSIFY_LABELS = { new:'Mới phát sinh', churn:'Ngừng phát sinh', growth:'Tăng trưởng', decline:'Sụt giảm', flat:'Không đổi' };
+const CLASSIFY_COLORS = { new:'var(--pos)', churn:'var(--neg)', growth:'var(--pos)', decline:'var(--neg)', flat:'var(--ink-soft)' };
+
+function classifyCustomer(r){
+  if(r.p1_rev===0 && r.p2_rev>0) return 'new';
+  if(r.p1_rev>0 && r.p2_rev===0) return 'churn';
+  if(r.p2_rev - r.p1_rev > 0) return 'growth';
+  if(r.p2_rev - r.p1_rev < 0) return 'decline';
+  return 'flat';
+}
+
+function parseNum(str){
+  const s = String(str).replace(/[.,\s]/g,'');
+  if(s==='') return null;
+  const n = Number(s);
+  return isNaN(n) ? null : n;
+}
+
+function fmtNum(n){ return Math.round(n).toLocaleString('vi-VN'); }
+function fmtPct(delta, base){
+  if(base===0) return delta===0 ? '0%' : '—';
+  const p = (delta/base)*100;
+  return (p>=0?'+':'') + p.toFixed(1) + '%';
+}
+
+function aggregate(rows, keyFn){
+  const map = new Map();
+  rows.forEach(r=>{
+    const k = keyFn(r);
+    if(!map.has(k)) map.set(k, {orders:0, revenue:0});
+    const o = map.get(k);
+    o.orders += 1;
+    o.revenue += r.tongCuoc;
+  });
+  return map;
+}
+
+function computeCustomerAttributes(rows){
+  // rows: mảng đơn hàng đã lọc (p1Filtered + p2Filtered). Với mỗi khách hàng,
+  // lấy giá trị Họ tên người gửi / Bưu cục gửi xuất hiện NHIỀU LẦN NHẤT (đại diện).
+  const map = new Map();
+  rows.forEach(r=>{
+    if(!map.has(r.cust)) map.set(r.cust, {hoTen:new Map(), buucuc:new Map()});
+    const o = map.get(r.cust);
+    o.hoTen.set(r.hoTen, (o.hoTen.get(r.hoTen)||0)+1);
+    o.buucuc.set(r.buucuc, (o.buucuc.get(r.buucuc)||0)+1);
+  });
+  const result = new Map();
+  map.forEach((v,k)=>{
+    const topHoTen = [...v.hoTen.entries()].sort((a,b)=>b[1]-a[1])[0];
+    const topBuuCuc = [...v.buucuc.entries()].sort((a,b)=>b[1]-a[1])[0];
+    const others = v.buucuc.size;
+    result.set(k, {
+      hoTen: topHoTen ? topHoTen[0] : '',
+      buucuc: topBuuCuc ? topBuuCuc[0] + (others>1 ? ` (+${others-1} BC khác)` : '') : ''
+    });
+  });
+  return result;
+}
+
+function buildCombined(p1Filtered, p2Filtered, keyFn){
+  const m1 = aggregate(p1Filtered, keyFn);
+  const m2 = aggregate(p2Filtered, keyFn);
+  const keys = new Set([...m1.keys(), ...m2.keys()]);
+  const result = [];
+  keys.forEach(k=>{
+    const a = m1.get(k) || {orders:0, revenue:0};
+    const b = m2.get(k) || {orders:0, revenue:0};
+    result.push({
+      key: k,
+      p1_orders: a.orders, p1_rev: a.revenue,
+      p2_orders: b.orders, p2_rev: b.revenue,
+      delta_rev: b.revenue - a.revenue,
+      delta_orders: b.orders - a.orders
+    });
+  });
+  return result;
+}
+
+function computeFilteredData(){
+  const merged = getMergedRows();
+  const p1Filtered = merged.filter(passFiltersFor('p1'));
+  const p2Filtered = merged.filter(passFiltersFor('p2'));
+  return { p1Filtered, p2Filtered };
+}
+
+function renderAll(){
+  const { p1Filtered, p2Filtered } = computeFilteredData();
+
+  renderSummary(p1Filtered, p2Filtered);
+
+  const legend = document.getElementById('legendBox');
+  legend.innerHTML = `
+    <span><span class="sw" style="background:var(--p1)"></span>Kỳ 1: ${state.filters.p1From} → ${state.filters.p1To}</span>
+    <span><span class="sw" style="background:var(--p2)"></span>Kỳ 2: ${state.filters.p2From} → ${state.filters.p2To}</span>
+    <span style="color:var(--ink-soft)">(${state.dataFiles.length} file, ${state.dataFiles.reduce((a,f)=>a+f.rows.length,0)} dòng)</span>
+  `;
+
+  if(state.tab==='customer') renderCustomerTable(p1Filtered, p2Filtered);
+  else if(state.tab==='service') renderServiceTable(p1Filtered, p2Filtered);
+  else if(state.tab==='buucuc') renderBuuCucTable(p1Filtered, p2Filtered);
+  else renderKhlTab(p1Filtered, p2Filtered);
+}
+
+function renderSummary(p1Filtered, p2Filtered){
+  const sum1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const cnt1 = p1Filtered.length;
+  const cust1 = new Set(p1Filtered.map(r=>r.cust)).size;
+  const sum2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const cnt2 = p2Filtered.length;
+  const cust2 = new Set(p2Filtered.map(r=>r.cust)).size;
+
+  const grid = document.getElementById('summaryGrid');
+  grid.innerHTML = `
+    <div class="stat">
+      <div class="label">Doanh thu Kỳ 1</div>
+      <div class="val p1">${fmtNum(sum1)} đ</div>
+      <div class="note">${cnt1} đơn · ${cust1} khách hàng</div>
+    </div>
+    <div class="stat">
+      <div class="label">Doanh thu Kỳ 2</div>
+      <div class="val p2">${fmtNum(sum2)} đ</div>
+      <div class="note">${cnt2} đơn · ${cust2} khách hàng</div>
+    </div>
+    <div class="stat">
+      <div class="label">Chênh lệch doanh thu</div>
+      <div class="val" style="color:${sum2-sum1>=0?'var(--pos)':'var(--neg)'}">
+        ${(sum2-sum1>=0?'+':'') + fmtNum(sum2-sum1) + ' đ'}
+      </div>
+      <div class="note">${fmtPct(sum2-sum1, sum1)} so với kỳ 1</div>
+    </div>
+    <div class="stat">
+      <div class="label">Khách hàng chung 2 kỳ</div>
+      <div class="val">${[...new Set(p1Filtered.map(r=>r.cust))].filter(c=>new Set(p2Filtered.map(r=>r.cust)).has(c)).length}</div>
+      <div class="note">Xuất hiện ở cả hai kỳ</div>
+    </div>
+  `;
+}
+
+function sortRows(rows){
+  const {key, dir} = state.sort;
+  return rows.slice().sort((a,b)=>{
+    let av = a[key], bv = b[key];
+    if(typeof av === 'string') return av.localeCompare(bv) * dir;
+    return (av-bv)*dir;
+  });
+}
+
+function headerCell(label, key){
+  const active = state.sort.key===key;
+  return `<th data-key="${key}" class="${active?'sorted':''}">${label}${active ? (state.sort.dir===1?' ▲':' ▼') : ''}</th>`;
+}
+
+function attachSort(){
+  document.querySelectorAll('#mainTable th[data-key]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const key = th.dataset.key;
+      if(state.sort.key===key) state.sort.dir *= -1;
+      else state.sort = {key, dir:-1};
+      renderAll();
+    });
+  });
+}
+
+function renderCustomerTable(p1Filtered, p2Filtered){
+  const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
+  const attrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
+  let combined = buildCombined(p1Filtered, p2Filtered, r=>r.cust);
+  combined = combined.map(r=>({
+    ...r,
+    classify: classifyCustomer(r),
+    hoTen: (attrMap.get(r.key) && attrMap.get(r.key).hoTen) || '',
+    buucucRep: (attrMap.get(r.key) && attrMap.get(r.key).buucuc) || ''
+  }));
+
+  // classify summary (before applying classify/revenue filters, but after date/service/buucuc/search filters)
+  if(hasP2){
+    const groups = {new:[], churn:[], growth:[], decline:[], flat:[]};
+    combined.forEach(r=>groups[r.classify].push(r));
+    const box = document.getElementById('classifySummary');
+    box.classList.remove('hidden');
+    const cardFor = (key)=>{
+      const arr = groups[key];
+      const rev = arr.reduce((a,r)=>a + (key==='churn' ? -r.p1_rev : (key==='new' ? r.p2_rev : r.delta_rev)), 0);
+      return `<div class="stat">
+        <div class="label">${CLASSIFY_LABELS[key]}</div>
+        <div class="val" style="color:${CLASSIFY_COLORS[key]}">${arr.length} khách</div>
+        <div class="note ${rev>=0?'':''}" style="color:${CLASSIFY_COLORS[key]}">${rev>=0?'+':''}${fmtNum(rev)} đ</div>
+      </div>`;
+    };
+    box.innerHTML = cardFor('new') + cardFor('growth') + cardFor('decline') + cardFor('churn');
+  } else {
+    document.getElementById('classifySummary').classList.add('hidden');
+  }
+
+  // apply classify + revenue-range filters
+  combined = combined.filter(r=>{
+    if(hasP2 && !state.filters.classify.has(r.classify)) return false;
+    const refRev = hasP2 ? Math.max(r.p1_rev, r.p2_rev) : r.p1_rev;
+    if(state.filters.revMin!==null && refRev < state.filters.revMin) return false;
+    if(state.filters.revMax!==null && refRev > state.filters.revMax) return false;
+    return true;
+  });
+
+  const rows = sortRows(combined);
+
+  const table = document.getElementById('mainTable');
+  const colCount = hasP2 ? 10 : 5;
+  table.innerHTML = `
+    <thead><tr>
+      ${headerCell('Mã khách hàng', 'key')}
+      <th>Họ tên người gửi</th>
+      <th>Bưu cục gửi</th>
+      ${headerCell('Đơn Kỳ 1', 'p1_orders')}
+      ${headerCell('Doanh thu Kỳ 1', 'p1_rev')}
+      ${hasP2 ? headerCell('Đơn Kỳ 2', 'p2_orders') : ''}
+      ${hasP2 ? headerCell('Doanh thu Kỳ 2', 'p2_rev') : ''}
+      ${hasP2 ? headerCell('Chênh lệch', 'delta_rev') : ''}
+      ${hasP2 ? headerCell('% thay đổi', 'delta_rev') : ''}
+      ${hasP2 ? '<th>Biến động</th>' : ''}
+    </tr></thead>
+    <tbody>
+    ${rows.length===0 ? `<tr><td colspan="${colCount}"><div class="empty-state">Không có dữ liệu khớp bộ lọc</div></td></tr>` :
+      rows.map(r=>`
+      <tr class="customer-row" data-cust="${encodeURIComponent(r.key)}">
+        <td>${r.key}</td>
+        <td>${r.hoTen}</td>
+        <td>${r.buucucRep}</td>
+        <td class="mono">${fmtNum(r.p1_orders)}</td>
+        <td class="mono">${fmtNum(r.p1_rev)}</td>
+        ${hasP2 ? `<td class="mono">${fmtNum(r.p2_orders)}</td>` : ''}
+        ${hasP2 ? `<td class="mono">${fmtNum(r.p2_rev)}</td>` : ''}
+        ${hasP2 ? `<td class="mono ${r.delta_rev>=0?'pos':'neg'}">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>` : ''}
+        ${hasP2 ? `<td class="mono ${r.delta_rev>=0?'pos':'neg'}">${fmtPct(r.delta_rev, r.p1_rev)}</td>` : ''}
+        ${hasP2 ? `<td style="color:${CLASSIFY_COLORS[r.classify]}; font-weight:600;">${CLASSIFY_LABELS[r.classify]}</td>` : ''}
+      </tr>
+      <tr class="detail-row hidden" data-detail-for="${encodeURIComponent(r.key)}"><td colspan="${colCount}"></td></tr>
+      `).join('')
+    }
+    </tbody>
+  `;
+  attachSort();
+
+  document.querySelectorAll('#mainTable tr.customer-row').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const cust = decodeURIComponent(tr.dataset.cust);
+      const detailRow = document.querySelector(`tr.detail-row[data-detail-for="${tr.dataset.cust}"]`);
+      const isOpen = !detailRow.classList.contains('hidden');
+      document.querySelectorAll('tr.detail-row').forEach(d=>d.classList.add('hidden'));
+      if(!isOpen){
+        detailRow.classList.remove('hidden');
+        const cell = detailRow.querySelector('td');
+        const c1 = p1Filtered.filter(r=>r.cust===cust);
+        const c2 = p2Filtered.filter(r=>r.cust===cust);
+        const byService = buildCombined(c1, c2, r=>r.nhom + ' — ' + r.ten);
+        const sorted = sortRows2(byService, 'p1_rev');
+        cell.innerHTML = `<div class="detail-inner">
+          <table>
+            <thead><tr>
+              <th style="text-align:left">Dịch vụ</th>
+              <th>Đơn K1</th><th>Doanh thu K1</th>
+              <th>Đơn K2</th><th>Doanh thu K2</th><th>Chênh lệch</th>
+            </tr></thead>
+            <tbody>
+            ${sorted.map(s=>`
+              <tr>
+                <td style="text-align:left">${s.key}</td>
+                <td class="mono">${fmtNum(s.p1_orders)}</td>
+                <td class="mono">${fmtNum(s.p1_rev)}</td>
+                <td class="mono">${fmtNum(s.p2_orders)}</td><td class="mono">${fmtNum(s.p2_rev)}</td><td class="mono ${s.delta_rev>=0?'pos':'neg'}">${s.delta_rev>=0?'+':''}${fmtNum(s.delta_rev)}</td>
+              </tr>
+            `).join('')}
+            </tbody>
+          </table>
+        </div>`;
+      }
+    });
+  });
+
+  document.getElementById('footNote').textContent = `${rows.length} khách hàng trong bộ lọc hiện tại. Bấm vào một dòng để xem chi tiết theo dịch vụ.`;
+  window.__exportRows = { type:'customer', rows, hasP2, hasClassify:hasP2 };
+}
+
+function sortRows2(rows, key){
+  return rows.slice().sort((a,b)=>b[key]-a[key]);
+}
+
+function renderServiceTable(p1Filtered, p2Filtered){
+  const isGroup = state.serviceView === 'group';
+  const keyFn = isGroup ? (r=>r.nhom) : (r=>r.nhom + ' — ' + r.ten);
+  const combined = buildCombined(p1Filtered, p2Filtered, keyFn);
+  const rows = sortRows(combined);
+  const table = document.getElementById('mainTable');
+  const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
+  const colCount = 7;
+  table.innerHTML = `
+    <thead><tr>
+      ${headerCell(isGroup ? 'Nhóm dịch vụ' : 'Dịch vụ', 'key')}
+      ${headerCell('Đơn Kỳ 1', 'p1_orders')}
+      ${headerCell('Doanh thu Kỳ 1', 'p1_rev')}
+      ${headerCell('Đơn Kỳ 2', 'p2_orders')}
+      ${headerCell('Doanh thu Kỳ 2', 'p2_rev')}
+      ${headerCell('Chênh lệch', 'delta_rev')}
+      ${headerCell('% thay đổi', 'delta_rev')}
+    </tr></thead>
+    <tbody>
+    ${rows.length===0 ? `<tr><td colspan="${colCount}"><div class="empty-state">Không có dữ liệu khớp bộ lọc</div></td></tr>` :
+      rows.map(r=>`
+      <tr class="${isGroup ? 'customer-row' : ''}" data-nhom="${encodeURIComponent(r.key)}">
+        <td>${r.key}</td>
+        <td class="mono">${fmtNum(r.p1_orders)}</td>
+        <td class="mono">${fmtNum(r.p1_rev)}</td>
+        <td class="mono">${fmtNum(r.p2_orders)}</td>
+        <td class="mono">${fmtNum(r.p2_rev)}</td>
+        <td class="mono ${r.delta_rev>=0?'pos':'neg'}">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>
+        <td class="mono ${r.delta_rev>=0?'pos':'neg'}">${fmtPct(r.delta_rev, r.p1_rev)}</td>
+      </tr>
+      ${isGroup ? `<tr class="detail-row hidden" data-nhom-detail="${encodeURIComponent(r.key)}"><td colspan="${colCount}"></td></tr>` : ''}
+      `).join('')
+    }
+    </tbody>
+  `;
+  attachSort();
+
+  if(isGroup){
+    document.querySelectorAll('#mainTable tr.customer-row[data-nhom]').forEach(tr=>{
+      tr.addEventListener('click', ()=>{
+        const nhom = decodeURIComponent(tr.dataset.nhom);
+        const detailRow = document.querySelector(`tr.detail-row[data-nhom-detail="${tr.dataset.nhom}"]`);
+        const isOpen = !detailRow.classList.contains('hidden');
+        document.querySelectorAll('tr.detail-row').forEach(d=>d.classList.add('hidden'));
+        if(!isOpen){
+          detailRow.classList.remove('hidden');
+          const cell = detailRow.querySelector('td');
+          const c1 = p1Filtered.filter(r=>r.nhom===nhom);
+          const c2 = p2Filtered.filter(r=>r.nhom===nhom);
+          const byTen = buildCombined(c1, c2, r=>r.ten);
+          const sorted = sortRows2(byTen, 'p1_rev');
+          cell.innerHTML = `<div class="detail-inner">
+            <table>
+              <thead><tr>
+                <th style="text-align:left">Tên dịch vụ</th>
+                <th>Đơn K1</th><th>Doanh thu K1</th><th>Đơn K2</th><th>Doanh thu K2</th><th>Chênh lệch</th>
+              </tr></thead>
+              <tbody>
+              ${sorted.map(s=>`
+                <tr>
+                  <td style="text-align:left">${s.key}</td>
+                  <td class="mono">${fmtNum(s.p1_orders)}</td>
+                  <td class="mono">${fmtNum(s.p1_rev)}</td>
+                  <td class="mono">${fmtNum(s.p2_orders)}</td>
+                  <td class="mono">${fmtNum(s.p2_rev)}</td>
+                  <td class="mono ${s.delta_rev>=0?'pos':'neg'}">${s.delta_rev>=0?'+':''}${fmtNum(s.delta_rev)}</td>
+                </tr>
+              `).join('')}
+              </tbody>
+            </table>
+          </div>`;
+        }
+      });
+    });
+  }
+
+  document.getElementById('footNote').textContent = isGroup
+    ? `${rows.length} nhóm dịch vụ. Bấm vào một dòng để xem chi tiết từng dịch vụ trong nhóm.`
+    : `${rows.length} dịch vụ trong bộ lọc hiện tại.`;
+  window.__exportRows = { type:'service', rows, hasP2 };
+}
+
+function renderBuuCucTable(p1Filtered, p2Filtered){
+  const combined = buildCombined(p1Filtered, p2Filtered, r=>r.buucuc);
+  const rows = sortRows(combined);
+  const table = document.getElementById('mainTable');
+  const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
+  table.innerHTML = `
+    <thead><tr>
+      ${headerCell('Bưu cục gửi', 'key')}
+      ${headerCell('Đơn Kỳ 1', 'p1_orders')}
+      ${headerCell('Doanh thu Kỳ 1', 'p1_rev')}
+      ${hasP2 ? headerCell('Đơn Kỳ 2', 'p2_orders') : ''}
+      ${hasP2 ? headerCell('Doanh thu Kỳ 2', 'p2_rev') : ''}
+      ${hasP2 ? headerCell('Chênh lệch', 'delta_rev') : ''}
+      ${hasP2 ? headerCell('% thay đổi', 'delta_rev') : ''}
+    </tr></thead>
+    <tbody>
+    ${rows.length===0 ? `<tr><td colspan="7"><div class="empty-state">Không có dữ liệu khớp bộ lọc</div></td></tr>` :
+      rows.map(r=>`
+      <tr>
+        <td>${r.key}</td>
+        <td class="mono">${fmtNum(r.p1_orders)}</td>
+        <td class="mono">${fmtNum(r.p1_rev)}</td>
+        ${hasP2 ? `<td class="mono">${fmtNum(r.p2_orders)}</td>` : ''}
+        ${hasP2 ? `<td class="mono">${fmtNum(r.p2_rev)}</td>` : ''}
+        ${hasP2 ? `<td class="mono ${r.delta_rev>=0?'pos':'neg'}">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>` : ''}
+        ${hasP2 ? `<td class="mono ${r.delta_rev>=0?'pos':'neg'}">${fmtPct(r.delta_rev, r.p1_rev)}</td>` : ''}
+      </tr>`).join('')
+    }
+    </tbody>
+  `;
+  attachSort();
+  document.getElementById('footNote').textContent = `${rows.length} bưu cục gửi trong bộ lọc hiện tại.`;
+  window.__exportRows = { type:'buucuc', rows, hasP2 };
+}
+
+document.getElementById('btnExport').addEventListener('click', ()=>{
+  const data = window.__exportRows;
+  if(!data || !data.rows.length) return;
+  const headerNames = data.type==='customer' ? 'MaKhachHangTCT' : (data.type==='service' ? 'DichVu' : (data.type==='khl' ? 'MaKhachHangTCT' : 'BuuCucGoi'));
+  let header = [headerNames];
+  if(data.type==='customer' || data.type==='khl') header = header.concat(['HoTenNguoiGoi','BuuCucGoi']);
+  if(data.type==='khl' && data.extraCols) header = header.concat(data.extraCols);
+  header = header.concat(['DonKy1', 'DoanhThuKy1']);
+  if(data.hasP2) header = header.concat(['DonKy2','DoanhThuKy2','ChenhLech','PhanTramThayDoi']);
+  if(data.hasClassify) header.push('BienDong');
+  if(data.type==='khl') header.push('TrangThai');
+  const lines = [header.join(',')];
+  data.rows.forEach(r=>{
+    let line = [`"${r.key}"`];
+    if(data.type==='customer' || data.type==='khl') line = line.concat([`"${r.hoTen||''}"`, `"${r.buucucRep||''}"`]);
+    if(data.type==='khl' && data.extraCols) line = line.concat(data.extraCols.map(c=>`"${(r.extra && r.extra[c]!=null) ? r.extra[c] : ''}"`));
+    line = line.concat([r.p1_orders, r.p1_rev]);
+    if(data.hasP2) line = line.concat([r.p2_orders, r.p2_rev, r.delta_rev, r.p1_rev? ((r.delta_rev/r.p1_rev)*100).toFixed(1)+'%':'']);
+    if(data.hasClassify) line.push(`"${r.classify ? CLASSIFY_LABELS[r.classify] : ''}"`);
+    if(data.type==='khl') line.push(`"${r.phatSinh?'Có phát sinh':'Không phát sinh'}"`);
+    lines.push(line.join(','));
+  });
+  const csv = '\uFEFF' + lines.join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `so-sanh-${data.type}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ===================== BÁO CÁO TỔNG THỂ (Excel / Word / PDF) =====================
+
+function buildReportData(){
+  const { p1Filtered, p2Filtered } = computeFilteredData();
+
+  const custAttrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
+  const custCombined = buildCombined(p1Filtered, p2Filtered, r=>r.cust)
+    .map(r=>({
+      ...r,
+      classify: classifyCustomer(r),
+      hoTen: (custAttrMap.get(r.key) && custAttrMap.get(r.key).hoTen) || '',
+      buucucRep: (custAttrMap.get(r.key) && custAttrMap.get(r.key).buucuc) || ''
+    }));
+  const customers = sortRows2(custCombined, 'p1_rev');
+
+  const services = sortRows2(buildCombined(p1Filtered, p2Filtered, r=>r.nhom), 'p1_rev');
+  const buucuc = sortRows2(buildCombined(p1Filtered, p2Filtered, r=>r.buucuc), 'p1_rev');
+
+  const sum1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const sum2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const cust1Set = new Set(p1Filtered.map(r=>r.cust));
+  const cust2Set = new Set(p2Filtered.map(r=>r.cust));
+  const common = [...cust1Set].filter(c=>cust2Set.has(c)).length;
+
+  return {
+    p1Name: `Nguồn: ${state.dataFiles.length} file dữ liệu đã nạp`,
+    p2Name: `Nguồn: ${state.dataFiles.length} file dữ liệu đã nạp`,
+    p1Range: `${state.filters.p1From} → ${state.filters.p1To}`,
+    p2Range: `${state.filters.p2From} → ${state.filters.p2To}`,
+    summary: {
+      sum1, cnt1: p1Filtered.length, cust1: cust1Set.size,
+      sum2, cnt2: p2Filtered.length, cust2: cust2Set.size,
+      delta: sum2 - sum1, common
+    },
+    customers, services, buucuc
+  };
+}
+
+document.getElementById('btnExportExcel').addEventListener('click', ()=>{
+  const d = buildReportData();
+  const wb = XLSX.utils.book_new();
+
+  const summaryAoa = [
+    ['BÁO CÁO SO SÁNH KHÁCH HÀNG THEO DỊCH VỤ & THỜI GIAN'],
+    [],
+    ['Kỳ 1', d.p1Name, d.p1Range],
+    ['Kỳ 2', d.p2Name, d.p2Range],
+    [],
+    ['Chỉ tiêu', 'Kỳ 1', 'Kỳ 2', 'Chênh lệch'],
+    ['Doanh thu (đ)', d.summary.sum1, d.summary.sum2, d.summary.delta],
+    ['Số đơn', d.summary.cnt1, d.summary.cnt2, d.summary.cnt2-d.summary.cnt1],
+    ['Số khách hàng', d.summary.cust1, d.summary.cust2, d.summary.cust2-d.summary.cust1],
+    ['Khách hàng chung 2 kỳ', d.summary.common, '', '']
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryAoa), 'Tong quan');
+
+  const custAoa = [['MaKhachHangTCT','HoTenNguoiGoi','BuuCucGoi','DonKy1','DoanhThuKy1','DonKy2','DoanhThuKy2','ChenhLech','PhanTramThayDoi','BienDong']]
+    .concat(d.customers.map(r=>[r.key, r.hoTen, r.buucucRep, r.p1_orders, r.p1_rev, r.p2_orders, r.p2_rev, r.delta_rev, r.p1_rev ? ((r.delta_rev/r.p1_rev)*100).toFixed(1)+'%' : '', CLASSIFY_LABELS[r.classify]]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(custAoa), 'Theo khach hang');
+
+  const svcAoa = [['NhomDichVu','DonKy1','DoanhThuKy1','DonKy2','DoanhThuKy2','ChenhLech','PhanTramThayDoi']]
+    .concat(d.services.map(r=>[r.key, r.p1_orders, r.p1_rev, r.p2_orders, r.p2_rev, r.delta_rev, r.p1_rev ? ((r.delta_rev/r.p1_rev)*100).toFixed(1)+'%' : '']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(svcAoa), 'Theo nhom dich vu');
+
+  const bcAoa = [['BuuCucGoi','DonKy1','DoanhThuKy1','DonKy2','DoanhThuKy2','ChenhLech','PhanTramThayDoi']]
+    .concat(d.buucuc.map(r=>[r.key, r.p1_orders, r.p1_rev, r.p2_orders, r.p2_rev, r.delta_rev, r.p1_rev ? ((r.delta_rev/r.p1_rev)*100).toFixed(1)+'%' : '']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(bcAoa), 'Theo buu cuc');
+
+  XLSX.writeFile(wb, `bao-cao-tong-the-${new Date().toISOString().slice(0,10)}.xlsx`);
+});
+
+function buildReportHTMLBody(d, opts){
+  opts = opts || {};
+  const custRows = opts.limitCustomers ? d.customers.slice(0, opts.limitCustomers) : d.customers;
+  const bcRows = opts.limitBuuCuc ? d.buucuc.slice(0, opts.limitBuuCuc) : d.buucuc;
+  const rowTr = (r)=>`<tr>
+      <td>${r.key}</td>
+      <td style="text-align:right">${fmtNum(r.p1_orders)}</td>
+      <td style="text-align:right">${fmtNum(r.p1_rev)}</td>
+      <td style="text-align:right">${fmtNum(r.p2_orders)}</td>
+      <td style="text-align:right">${fmtNum(r.p2_rev)}</td>
+      <td style="text-align:right">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>
+      <td style="text-align:right">${fmtPct(r.delta_rev, r.p1_rev)}</td>
+    </tr>`;
+  const custRowTr = (r)=>`<tr>
+      <td>${r.key}</td>
+      <td>${r.hoTen||''}</td>
+      <td>${r.buucucRep||''}</td>
+      <td style="text-align:right">${fmtNum(r.p1_orders)}</td>
+      <td style="text-align:right">${fmtNum(r.p1_rev)}</td>
+      <td style="text-align:right">${fmtNum(r.p2_orders)}</td>
+      <td style="text-align:right">${fmtNum(r.p2_rev)}</td>
+      <td style="text-align:right">${r.delta_rev>=0?'+':''}${fmtNum(r.delta_rev)}</td>
+      <td style="text-align:right">${fmtPct(r.delta_rev, r.p1_rev)}</td>
+    </tr>`;
+  return `
+    <h1 style="font-family:Georgia,serif;">Báo cáo so sánh khách hàng theo dịch vụ &amp; thời gian</h1>
+    <p><b>Kỳ 1:</b> ${d.p1Name} (${d.p1Range}) &nbsp;&nbsp; <b>Kỳ 2:</b> ${d.p2Name} (${d.p2Range})</p>
+    <h2>Tổng quan</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%;">
+      <tr><th>Chỉ tiêu</th><th>Kỳ 1</th><th>Kỳ 2</th><th>Chênh lệch</th></tr>
+      <tr><td>Doanh thu (đ)</td><td style="text-align:right">${fmtNum(d.summary.sum1)}</td><td style="text-align:right">${fmtNum(d.summary.sum2)}</td><td style="text-align:right">${d.summary.delta>=0?'+':''}${fmtNum(d.summary.delta)}</td></tr>
+      <tr><td>Số đơn</td><td style="text-align:right">${fmtNum(d.summary.cnt1)}</td><td style="text-align:right">${fmtNum(d.summary.cnt2)}</td><td style="text-align:right">${fmtNum(d.summary.cnt2-d.summary.cnt1)}</td></tr>
+      <tr><td>Số khách hàng</td><td style="text-align:right">${fmtNum(d.summary.cust1)}</td><td style="text-align:right">${fmtNum(d.summary.cust2)}</td><td style="text-align:right">${fmtNum(d.summary.cust2-d.summary.cust1)}</td></tr>
+      <tr><td>Khách hàng chung 2 kỳ</td><td colspan="3">${fmtNum(d.summary.common)}</td></tr>
+    </table>
+
+    <h2>Theo nhóm dịch vụ</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%;">
+      <tr><th>Nhóm dịch vụ</th><th>Đơn K1</th><th>Doanh thu K1</th><th>Đơn K2</th><th>Doanh thu K2</th><th>Chênh lệch</th><th>% thay đổi</th></tr>
+      ${d.services.map(rowTr).join('')}
+    </table>
+
+    <h2>Theo bưu cục gửi${opts.limitBuuCuc && d.buucuc.length>opts.limitBuuCuc ? ` (top ${opts.limitBuuCuc}/${d.buucuc.length})` : ''}</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%;">
+      <tr><th>Bưu cục gửi</th><th>Đơn K1</th><th>Doanh thu K1</th><th>Đơn K2</th><th>Doanh thu K2</th><th>Chênh lệch</th><th>% thay đổi</th></tr>
+      ${bcRows.map(rowTr).join('')}
+    </table>
+
+    <h2>Theo khách hàng${opts.limitCustomers && d.customers.length>opts.limitCustomers ? ` (top ${opts.limitCustomers}/${d.customers.length} theo doanh thu — tải bản Excel để xem đầy đủ)` : ''}</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%;">
+      <tr><th>Mã khách hàng</th><th>Họ tên người gửi</th><th>Bưu cục gửi</th><th>Đơn K1</th><th>Doanh thu K1</th><th>Đơn K2</th><th>Doanh thu K2</th><th>Chênh lệch</th><th>% thay đổi</th></tr>
+      ${custRows.map(custRowTr).join('')}
+    </table>
+  `;
+}
+
+document.getElementById('btnExportWord').addEventListener('click', ()=>{
+  const d = buildReportData();
+  const body = buildReportHTMLBody(d, {});
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+  <head><meta charset="utf-8"><title>Báo cáo</title></head>
+  <body style="font-family:Calibri,Arial,sans-serif; font-size:12px;">${body}</body></html>`;
+  const blob = new Blob(['\ufeff', html], {type:'application/msword'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bao-cao-tong-the-${new Date().toISOString().slice(0,10)}.doc`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btnExportPdf').addEventListener('click', ()=>{
+  const d = buildReportData();
+  const body = buildReportHTMLBody(d, { limitCustomers: 100, limitBuuCuc: 50 });
+  let printDiv = document.getElementById('printReportArea');
+  if(printDiv) printDiv.remove();
+  printDiv = document.createElement('div');
+  printDiv.id = 'printReportArea';
+  printDiv.innerHTML = body;
+  document.body.appendChild(printDiv);
+  document.body.classList.add('printing-report');
+  window.print();
+  window.onafterprint = ()=>{
+    document.body.classList.remove('printing-report');
+    printDiv.remove();
+  };
+});
+</script>
+</body>
+</html>
