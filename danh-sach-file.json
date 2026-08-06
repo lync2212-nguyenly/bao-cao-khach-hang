@@ -1,4 +1,12 @@
 {
-  "auto": ["thang-06-2026.xlsb", "thang-07-2026.xlsb"],
+  "auto": [
+    "thang-01-2026.xlsb",
+    "thang-02-2026.xlsb",
+    "thang-03-2026.xlsb",
+    "thang-04-2026.xlsb",
+    "thang-05-2026.xlsb",
+    "thang-06-2026.xlsb",
+    "thang-07-2026.xlsb"
+  ],
   "archive": []
 }
