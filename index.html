@@ -290,7 +290,9 @@ const state = {
   tab: 'customer',
   serviceView: 'group',
   sort: { key:'p1_rev', dir:-1 },
-  expanded: new Set()
+  expanded: new Set(),
+  lastCompute: null,   // kết quả tính toán gần nhất từ compute worker (dùng lại cho xuất báo cáo)
+  totalRows: 0
 };
 
 function setStatus(id, text, cls){
@@ -338,6 +340,241 @@ const WORKER_CODE = `
 `;
 const WORKER_URL = URL.createObjectURL(new Blob([WORKER_CODE], {type:'application/javascript'}));
 const DATA_COLUMNS = ['MaKhachHangTCT','HoTenNguoiGoi','BuuCucGoi','MaDichVu','MaLoai','TongCuoc','NgayPH'];
+
+// ===================== COMPUTE WORKER =====================
+// Toàn bộ việc lọc theo Kỳ 1/Kỳ 2, gộp theo khách hàng/dịch vụ/bưu cục, và tính
+// "Biến động" đều chạy trong worker này — không đụng tới luồng giao diện, nên dù
+// dữ liệu có vài triệu dòng, trang vẫn không bị "Trang không phản hồi".
+const COMPUTE_WORKER_CODE = `
+  let ENRICHED = [];
+
+  function enrichAll(raw, mappingEntries){
+    const mapping = new Map(mappingEntries);
+    return raw.map(row => {
+      const info = mapping.get(row.maloai);
+      return {
+        cust: row.cust, buucuc: row.buucuc, hoTen: row.hoTen, tongCuoc: row.tongCuoc, date: row.date,
+        ten: info ? info.ten : '(Chưa xác định)',
+        nhom: info ? info.nhom : 'Chưa xác định'
+      };
+    });
+  }
+
+  function passFilter(r, from, to, nhomSet, buucucSet, search){
+    if(r.date < from || r.date > to) return false;
+    if(!nhomSet.has(r.nhom)) return false;
+    if(!buucucSet.has(r.buucuc)) return false;
+    if(search && !r.cust.toUpperCase().includes(search)) return false;
+    return true;
+  }
+
+  function aggregate(rows, keyFn){
+    const map = new Map();
+    for(let i=0;i<rows.length;i++){
+      const r = rows[i];
+      const k = keyFn(r);
+      let o = map.get(k);
+      if(!o){ o = {orders:0, revenue:0}; map.set(k,o); }
+      o.orders += 1;
+      o.revenue += r.tongCuoc;
+    }
+    return map;
+  }
+
+  function buildCombined(p1, p2, keyFn){
+    const m1 = aggregate(p1, keyFn);
+    const m2 = aggregate(p2, keyFn);
+    const keys = new Set([...m1.keys(), ...m2.keys()]);
+    const result = [];
+    keys.forEach(k=>{
+      const a = m1.get(k) || {orders:0, revenue:0};
+      const b = m2.get(k) || {orders:0, revenue:0};
+      result.push({ key:k, p1_orders:a.orders, p1_rev:a.revenue, p2_orders:b.orders, p2_rev:b.revenue, delta_rev:b.revenue-a.revenue });
+    });
+    return result;
+  }
+
+  function classifyCustomer(r){
+    if(r.p1_rev===0 && r.p2_rev>0) return 'new';
+    if(r.p1_rev>0 && r.p2_rev===0) return 'churn';
+    if(r.p2_rev - r.p1_rev > 0) return 'growth';
+    if(r.p2_rev - r.p1_rev < 0) return 'decline';
+    return 'flat';
+  }
+
+  function computeCustomerAttributes(rows){
+    const map = new Map();
+    for(let i=0;i<rows.length;i++){
+      const r = rows[i];
+      let o = map.get(r.cust);
+      if(!o){ o = {hoTen:new Map(), buucuc:new Map()}; map.set(r.cust,o); }
+      o.hoTen.set(r.hoTen, (o.hoTen.get(r.hoTen)||0)+1);
+      o.buucuc.set(r.buucuc, (o.buucuc.get(r.buucuc)||0)+1);
+    }
+    const result = new Map();
+    map.forEach((v,k)=>{
+      const topHoTen = [...v.hoTen.entries()].sort((a,b)=>b[1]-a[1])[0];
+      const topBuuCuc = [...v.buucuc.entries()].sort((a,b)=>b[1]-a[1])[0];
+      const others = v.buucuc.size;
+      result.set(k, {
+        hoTen: topHoTen ? topHoTen[0] : '',
+        buucuc: topBuuCuc ? topBuuCuc[0] + (others>1 ? (' (+'+(others-1)+' BC khác)') : '') : ''
+      });
+    });
+    return result;
+  }
+
+  self.onmessage = function(e){
+    const msg = e.data;
+    try{
+      if(msg.type === 'setData'){
+        ENRICHED = enrichAll(msg.raw, msg.mappingEntries);
+        const allNhom = [...new Set(ENRICHED.map(r=>r.nhom))].sort();
+        const allBuuCuc = [...new Set(ENRICHED.map(r=>r.buucuc))].sort();
+        const dates = [...new Set(ENRICHED.map(r=>r.date))].sort();
+        postMessage({ type:'dataReady', allNhom, allBuuCuc, dates, total: ENRICHED.length });
+        return;
+      }
+      if(msg.type === 'compute'){
+        const f = msg.filters;
+        const nhomSet = new Set(f.nhom);
+        const buucucSet = new Set(f.buucuc);
+        const p1 = [], p2 = [];
+        for(let i=0;i<ENRICHED.length;i++){
+          const r = ENRICHED[i];
+          if(passFilter(r, f.p1From, f.p1To, nhomSet, buucucSet, f.search)) p1.push(r);
+          if(passFilter(r, f.p2From, f.p2To, nhomSet, buucucSet, f.search)) p2.push(r);
+        }
+        const sum1 = p1.reduce((a,r)=>a+r.tongCuoc,0);
+        const sum2 = p2.reduce((a,r)=>a+r.tongCuoc,0);
+        const cust1Set = new Set(p1.map(r=>r.cust));
+        const cust2Set = new Set(p2.map(r=>r.cust));
+        let common = 0;
+        cust1Set.forEach(c=>{ if(cust2Set.has(c)) common++; });
+
+        const attrMap = computeCustomerAttributes(p1.concat(p2));
+        const customers = buildCombined(p1, p2, r=>r.cust).map(r=>({
+          ...r,
+          classify: classifyCustomer(r),
+          hoTen: (attrMap.get(r.key) && attrMap.get(r.key).hoTen) || '',
+          buucucRep: (attrMap.get(r.key) && attrMap.get(r.key).buucuc) || ''
+        }));
+        const services = buildCombined(p1, p2, r=>r.nhom);
+        const servicesDetail = buildCombined(p1, p2, r=>r.nhom + ' — ' + r.ten);
+        const buucuc = buildCombined(p1, p2, r=>r.buucuc);
+
+        postMessage({
+          type:'result', reqId: msg.reqId,
+          summary: { sum1, cnt1:p1.length, cust1:cust1Set.size, sum2, cnt2:p2.length, cust2:cust2Set.size, delta:sum2-sum1, common },
+          customers, services, servicesDetail, buucuc
+        });
+        return;
+      }
+      if(msg.type === 'detail'){
+        const f = msg.filters;
+        const nhomSet = new Set(f.nhom);
+        const buucucSet = new Set(f.buucuc);
+        const p1 = [], p2 = [];
+        for(let i=0;i<ENRICHED.length;i++){
+          const r = ENRICHED[i];
+          if(msg.dimension==='customer' && r.cust !== msg.key) continue;
+          if(msg.dimension==='nhom' && r.nhom !== msg.key) continue;
+          if(passFilter(r, f.p1From, f.p1To, nhomSet, buucucSet, f.search)) p1.push(r);
+          if(passFilter(r, f.p2From, f.p2To, nhomSet, buucucSet, f.search)) p2.push(r);
+        }
+        const keyFn = msg.dimension==='customer' ? (r=>r.nhom + ' — ' + r.ten) : (r=>r.ten);
+        const rows = buildCombined(p1, p2, keyFn);
+        postMessage({ type:'detailResult', reqId: msg.reqId, rows });
+        return;
+      }
+    }catch(err){
+      postMessage({ type:'error', reqId: msg.reqId, error: (err && err.message) ? err.message : String(err) });
+    }
+  };
+`;
+const COMPUTE_WORKER_URL = URL.createObjectURL(new Blob([COMPUTE_WORKER_CODE], {type:'application/javascript'}));
+let computeWorker = null;
+let computeReqSeq = 0;
+const pendingCompute = new Map();
+
+function getComputeWorker(){
+  if(computeWorker) return computeWorker;
+  computeWorker = new Worker(COMPUTE_WORKER_URL);
+  computeWorker.onmessage = (e)=>{
+    const msg = e.data;
+    if(msg.type === 'dataReady'){
+      state.allNhom = msg.allNhom;
+      state.allBuuCuc = msg.allBuuCuc;
+      state.totalRows = msg.total;
+      if(msg.dates.length){
+        state.minDate = msg.dates[0];
+        state.maxDate = msg.dates[msg.dates.length-1];
+        if(!state.filters.dateTouched){
+          if(msg.dates.length<=1){
+            state.filters.p1From = state.filters.p1To = msg.dates[0];
+            state.filters.p2From = state.filters.p2To = msg.dates[0];
+          } else {
+            const mid = Math.ceil(msg.dates.length/2);
+            state.filters.p1From = msg.dates[0];
+            state.filters.p1To = msg.dates[mid-1];
+            state.filters.p2From = msg.dates[mid];
+            state.filters.p2To = msg.dates[msg.dates.length-1];
+          }
+        }
+      }
+      if(state.filters.nhom.size===0) state.allNhom.forEach(n=>state.filters.nhom.add(n));
+      if(state.filters.buucuc.size===0) state.allBuuCuc.forEach(b=>state.filters.buucuc.add(b));
+      if(dataReadyResolve) { dataReadyResolve(); dataReadyResolve = null; }
+      return;
+    }
+    const pending = pendingCompute.get(msg.reqId);
+    if(!pending) return;
+    pendingCompute.delete(msg.reqId);
+    if(msg.type === 'error') pending.reject(new Error(msg.error));
+    else pending.resolve(msg);
+  };
+  return computeWorker;
+}
+
+let dataReadyResolve = null;
+function sendDataToWorker(){
+  const worker = getComputeWorker();
+  const raw = state.dataFiles.flatMap(f=>f.rows);
+  const mappingEntries = state.mapping ? [...state.mapping.entries()] : [];
+  const p = new Promise(resolve=>{ dataReadyResolve = resolve; });
+  worker.postMessage({ type:'setData', raw, mappingEntries });
+  return p;
+}
+
+function runCompute(){
+  const worker = getComputeWorker();
+  const reqId = ++computeReqSeq;
+  const filters = {
+    p1From: state.filters.p1From, p1To: state.filters.p1To,
+    p2From: state.filters.p2From, p2To: state.filters.p2To,
+    nhom: [...state.filters.nhom], buucuc: [...state.filters.buucuc],
+    search: state.filters.search
+  };
+  return new Promise((resolve, reject)=>{
+    pendingCompute.set(reqId, {resolve, reject});
+    worker.postMessage({ type:'compute', reqId, filters });
+  });
+}
+
+function runDetail(dimension, key){
+  const worker = getComputeWorker();
+  const reqId = ++computeReqSeq;
+  const filters = {
+    p1From: state.filters.p1From, p1To: state.filters.p1To,
+    p2From: state.filters.p2From, p2To: state.filters.p2To,
+    nhom: [...state.filters.nhom], buucuc: [...state.filters.buucuc],
+    search: state.filters.search
+  };
+  return new Promise((resolve, reject)=>{
+    pendingCompute.set(reqId, {resolve, reject});
+    worker.postMessage({ type:'detail', reqId, dimension, key, filters });
+  });
+}
 
 function parseFileRows(fileOrBuffer, columns){
   return new Promise((resolve, reject)=>{
@@ -525,50 +762,22 @@ function renderArchiveList(archiveList){
 }
 tryAutoLoadFromServer();
 
-function enrich(row){
-  const info = state.mapping ? state.mapping.get(row.maloai) : null;
-  return {
-    ...row,
-    ten: info ? info.ten : '(Chưa xác định)',
-    nhom: info ? info.nhom : 'Chưa xác định'
-  };
-}
-
-function getMergedRows(){
-  return state.dataFiles.flatMap(f=>f.rows).map(enrich);
-}
-
-function tryRender(){
+async function tryRender(){
   if(!state.mapping || state.dataFiles.length===0) return;
   document.getElementById('app').classList.remove('hidden');
 
-  const allRows = getMergedRows();
+  const table = document.getElementById('mainTable');
+  table.innerHTML = `<tbody><tr><td><div class="empty-state">Đang xử lý dữ liệu ở luồng nền (không làm treo trang)...</div></td></tr></tbody>`;
 
-  state.allNhom = [...new Set(allRows.map(r=>r.nhom))].sort();
-  state.allBuuCuc = [...new Set(allRows.map(r=>r.buucuc))].sort();
-  if(state.filters.nhom.size===0) state.allNhom.forEach(n=>state.filters.nhom.add(n));
-  if(state.filters.buucuc.size===0) state.allBuuCuc.forEach(b=>state.filters.buucuc.add(b));
+  await sendDataToWorker(); // worker tự tính allNhom/allBuuCuc + khoảng ngày mặc định, cập nhật vào state
 
-  const uniq = [...new Set(allRows.map(r=>r.date))].sort();
-  if(!state.filters.dateTouched){
-    if(uniq.length <= 1){
-      state.filters.p1From = state.filters.p1To = uniq[0];
-      state.filters.p2From = state.filters.p2To = uniq[0];
-    } else {
-      const mid = Math.ceil(uniq.length/2);
-      state.filters.p1From = uniq[0];
-      state.filters.p1To = uniq[mid-1];
-      state.filters.p2From = uniq[mid];
-      state.filters.p2To = uniq[uniq.length-1];
-    }
-  }
   document.getElementById('fP1From').value = state.filters.p1From;
   document.getElementById('fP1To').value = state.filters.p1To;
   document.getElementById('fP2From').value = state.filters.p2From;
   document.getElementById('fP2To').value = state.filters.p2To;
 
   document.getElementById('routeLabel').textContent =
-    `${state.dataFiles.length} file dữ liệu (${allRows.length} dòng)  ·  Kỳ 1: ${state.filters.p1From} → ${state.filters.p1To}   ⇄   Kỳ 2: ${state.filters.p2From} → ${state.filters.p2To}`;
+    `${state.dataFiles.length} file dữ liệu (${state.totalRows} dòng)  ·  Kỳ 1: ${state.filters.p1From} → ${state.filters.p1To}   ⇄   Kỳ 2: ${state.filters.p2From} → ${state.filters.p2To}`;
 
   renderChips('chipsNhom', state.allNhom, state.filters.nhom);
   renderChips('chipsBuuCuc', state.allBuuCuc, state.filters.buucuc);
@@ -678,7 +887,7 @@ document.getElementById('fileKhl').addEventListener('change', async (e)=>{
   }
 });
 
-function renderKhlTab(p1Filtered, p2Filtered){
+function renderKhlTab(customersPrecomputed){
   const table = document.getElementById('mainTable');
   document.getElementById('classifySummary').classList.add('hidden');
 
@@ -690,23 +899,20 @@ function renderKhlTab(p1Filtered, p2Filtered){
     return;
   }
 
-  const attrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
-  const combined = buildCombined(p1Filtered, p2Filtered, r=>r.cust);
-  const combinedMap = new Map(combined.map(r=>[r.key, r]));
+  const combinedMap = new Map(customersPrecomputed.map(r=>[r.key, r]));
 
   const khlRows = [...state.khl.entries()].map(([code, extra])=>{
     const stat = combinedMap.get(code);
     const base = stat || { key:code, p1_orders:0, p1_rev:0, p2_orders:0, p2_rev:0, delta_rev:0 };
-    const attrs = attrMap.get(code);
     return {
       key: code,
       extra,
-      hoTen: (attrs && attrs.hoTen) || (extra && (extra['HoTenNguoiGoi']||extra['Ten']||extra['TenKhachHang'])) || '',
-      buucucRep: (attrs && attrs.buucuc) || '',
+      hoTen: (stat && stat.hoTen) || (extra && (extra['HoTenNguoiGoi']||extra['Ten']||extra['TenKhachHang'])) || '',
+      buucucRep: (stat && stat.buucucRep) || '',
       p1_orders: base.p1_orders, p1_rev: base.p1_rev,
       p2_orders: base.p2_orders, p2_rev: base.p2_rev,
       delta_rev: base.delta_rev,
-      classify: stat ? classifyCustomer(base) : null,
+      classify: stat ? stat.classify : null,
       phatSinh: !!stat && (base.p1_orders>0 || base.p2_orders>0)
     };
   });
@@ -715,8 +921,8 @@ function renderKhlTab(p1Filtered, p2Filtered){
   const found = khlRows.filter(r=>r.phatSinh).length;
   const totalRevKhl1 = khlRows.reduce((a,r)=>a+r.p1_rev,0);
   const totalRevKhl2 = khlRows.reduce((a,r)=>a+r.p2_rev,0);
-  const totalRevAll1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
-  const totalRevAll2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
+  const totalRevAll1 = state.lastCompute ? state.lastCompute.summary.sum1 : 0;
+  const totalRevAll2 = state.lastCompute ? state.lastCompute.summary.sum2 : 0;
 
   const extraCols = state.khlColumns.filter(c=>{
     const kk = c.toLowerCase().replace(/\s/g,'');
@@ -879,38 +1085,41 @@ function buildCombined(p1Filtered, p2Filtered, keyFn){
   return result;
 }
 
-function computeFilteredData(){
-  const merged = getMergedRows();
-  const p1Filtered = merged.filter(passFiltersFor('p1'));
-  const p2Filtered = merged.filter(passFiltersFor('p2'));
-  return { p1Filtered, p2Filtered };
-}
+let renderToken = 0;
 
-function renderAll(){
-  const { p1Filtered, p2Filtered } = computeFilteredData();
+async function renderAll(){
+  const myToken = ++renderToken;
+  const table = document.getElementById('mainTable');
+  table.innerHTML = `<tbody><tr><td><div class="empty-state">Đang tính toán...</div></td></tr></tbody>`;
 
-  renderSummary(p1Filtered, p2Filtered);
+  let result;
+  try{
+    result = await runCompute();
+  }catch(err){
+    table.innerHTML = `<tbody><tr><td><div class="empty-state">Lỗi tính toán: ${err.message}</div></td></tr></tbody>`;
+    return;
+  }
+  if(myToken !== renderToken) return; // có yêu cầu render mới hơn, bỏ kết quả cũ
+
+  state.lastCompute = result; // dùng lại cho Xuất Excel/Word/PDF, không cần tính lại
+
+  renderSummary(result.summary);
 
   const legend = document.getElementById('legendBox');
   legend.innerHTML = `
     <span><span class="sw" style="background:var(--p1)"></span>Kỳ 1: ${state.filters.p1From} → ${state.filters.p1To}</span>
     <span><span class="sw" style="background:var(--p2)"></span>Kỳ 2: ${state.filters.p2From} → ${state.filters.p2To}</span>
-    <span style="color:var(--ink-soft)">(${state.dataFiles.length} file, ${state.dataFiles.reduce((a,f)=>a+f.rows.length,0)} dòng)</span>
+    <span style="color:var(--ink-soft)">(${state.dataFiles.length} file, ${state.totalRows} dòng)</span>
   `;
 
-  if(state.tab==='customer') renderCustomerTable(p1Filtered, p2Filtered);
-  else if(state.tab==='service') renderServiceTable(p1Filtered, p2Filtered);
-  else if(state.tab==='buucuc') renderBuuCucTable(p1Filtered, p2Filtered);
-  else renderKhlTab(p1Filtered, p2Filtered);
+  if(state.tab==='customer') renderCustomerTable(result.customers);
+  else if(state.tab==='service') renderServiceTable(state.serviceView==='group' ? result.services : result.servicesDetail);
+  else if(state.tab==='buucuc') renderBuuCucTable(result.buucuc);
+  else renderKhlTab(result.customers);
 }
 
-function renderSummary(p1Filtered, p2Filtered){
-  const sum1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
-  const cnt1 = p1Filtered.length;
-  const cust1 = new Set(p1Filtered.map(r=>r.cust)).size;
-  const sum2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
-  const cnt2 = p2Filtered.length;
-  const cust2 = new Set(p2Filtered.map(r=>r.cust)).size;
+function renderSummary(summary){
+  const { sum1, cnt1, cust1, sum2, cnt2, cust2, delta, common } = summary;
 
   const grid = document.getElementById('summaryGrid');
   grid.innerHTML = `
@@ -926,14 +1135,14 @@ function renderSummary(p1Filtered, p2Filtered){
     </div>
     <div class="stat">
       <div class="label">Chênh lệch doanh thu</div>
-      <div class="val" style="color:${sum2-sum1>=0?'var(--pos)':'var(--neg)'}">
-        ${(sum2-sum1>=0?'+':'') + fmtNum(sum2-sum1) + ' đ'}
+      <div class="val" style="color:${delta>=0?'var(--pos)':'var(--neg)'}">
+        ${(delta>=0?'+':'') + fmtNum(delta) + ' đ'}
       </div>
-      <div class="note">${fmtPct(sum2-sum1, sum1)} so với kỳ 1</div>
+      <div class="note">${fmtPct(delta, sum1)} so với kỳ 1</div>
     </div>
     <div class="stat">
       <div class="label">Khách hàng chung 2 kỳ</div>
-      <div class="val">${[...new Set(p1Filtered.map(r=>r.cust))].filter(c=>new Set(p2Filtered.map(r=>r.cust)).has(c)).length}</div>
+      <div class="val">${common}</div>
       <div class="note">Xuất hiện ở cả hai kỳ</div>
     </div>
   `;
@@ -964,18 +1173,11 @@ function attachSort(){
   });
 }
 
-function renderCustomerTable(p1Filtered, p2Filtered){
+function renderCustomerTable(customersPrecomputed){
   const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
-  const attrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
-  let combined = buildCombined(p1Filtered, p2Filtered, r=>r.cust);
-  combined = combined.map(r=>({
-    ...r,
-    classify: classifyCustomer(r),
-    hoTen: (attrMap.get(r.key) && attrMap.get(r.key).hoTen) || '',
-    buucucRep: (attrMap.get(r.key) && attrMap.get(r.key).buucuc) || ''
-  }));
+  let combined = customersPrecomputed; // đã có sẵn classify, hoTen, buucucRep từ worker
 
-  // classify summary (before applying classify/revenue filters, but after date/service/buucuc/search filters)
+  // classify summary (trước khi áp bộ lọc biến động/doanh thu)
   if(hasP2){
     const groups = {new:[], churn:[], growth:[], decline:[], flat:[]};
     combined.forEach(r=>groups[r.classify].push(r));
@@ -995,7 +1197,7 @@ function renderCustomerTable(p1Filtered, p2Filtered){
     document.getElementById('classifySummary').classList.add('hidden');
   }
 
-  // apply classify + revenue-range filters
+  // apply classify + revenue-range filters (nhẹ, chỉ chạy trên số khách hàng duy nhất, không phải số đơn hàng)
   combined = combined.filter(r=>{
     if(hasP2 && !state.filters.classify.has(r.classify)) return false;
     const refRev = hasP2 ? Math.max(r.p1_rev, r.p2_rev) : r.p1_rev;
@@ -1044,7 +1246,7 @@ function renderCustomerTable(p1Filtered, p2Filtered){
   attachSort();
 
   document.querySelectorAll('#mainTable tr.customer-row').forEach(tr=>{
-    tr.addEventListener('click', ()=>{
+    tr.addEventListener('click', async ()=>{
       const cust = decodeURIComponent(tr.dataset.cust);
       const detailRow = document.querySelector(`tr.detail-row[data-detail-for="${tr.dataset.cust}"]`);
       const isOpen = !detailRow.classList.contains('hidden');
@@ -1052,9 +1254,8 @@ function renderCustomerTable(p1Filtered, p2Filtered){
       if(!isOpen){
         detailRow.classList.remove('hidden');
         const cell = detailRow.querySelector('td');
-        const c1 = p1Filtered.filter(r=>r.cust===cust);
-        const c2 = p2Filtered.filter(r=>r.cust===cust);
-        const byService = buildCombined(c1, c2, r=>r.nhom + ' — ' + r.ten);
+        cell.innerHTML = `<div class="detail-inner"><div class="empty-state">Đang tải chi tiết...</div></div>`;
+        const { rows: byService } = await runDetail('customer', cust);
         const sorted = sortRows2(byService, 'p1_rev');
         cell.innerHTML = `<div class="detail-inner">
           <table>
@@ -1087,11 +1288,9 @@ function sortRows2(rows, key){
   return rows.slice().sort((a,b)=>b[key]-a[key]);
 }
 
-function renderServiceTable(p1Filtered, p2Filtered){
+function renderServiceTable(combinedPrecomputed){
   const isGroup = state.serviceView === 'group';
-  const keyFn = isGroup ? (r=>r.nhom) : (r=>r.nhom + ' — ' + r.ten);
-  const combined = buildCombined(p1Filtered, p2Filtered, keyFn);
-  const rows = sortRows(combined);
+  const rows = sortRows(combinedPrecomputed);
   const table = document.getElementById('mainTable');
   const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
   const colCount = 7;
@@ -1126,7 +1325,7 @@ function renderServiceTable(p1Filtered, p2Filtered){
 
   if(isGroup){
     document.querySelectorAll('#mainTable tr.customer-row[data-nhom]').forEach(tr=>{
-      tr.addEventListener('click', ()=>{
+      tr.addEventListener('click', async ()=>{
         const nhom = decodeURIComponent(tr.dataset.nhom);
         const detailRow = document.querySelector(`tr.detail-row[data-nhom-detail="${tr.dataset.nhom}"]`);
         const isOpen = !detailRow.classList.contains('hidden');
@@ -1134,9 +1333,8 @@ function renderServiceTable(p1Filtered, p2Filtered){
         if(!isOpen){
           detailRow.classList.remove('hidden');
           const cell = detailRow.querySelector('td');
-          const c1 = p1Filtered.filter(r=>r.nhom===nhom);
-          const c2 = p2Filtered.filter(r=>r.nhom===nhom);
-          const byTen = buildCombined(c1, c2, r=>r.ten);
+          cell.innerHTML = `<div class="detail-inner"><div class="empty-state">Đang tải chi tiết...</div></div>`;
+          const { rows: byTen } = await runDetail('nhom', nhom);
           const sorted = sortRows2(byTen, 'p1_rev');
           cell.innerHTML = `<div class="detail-inner">
             <table>
@@ -1169,9 +1367,8 @@ function renderServiceTable(p1Filtered, p2Filtered){
   window.__exportRows = { type:'service', rows, hasP2 };
 }
 
-function renderBuuCucTable(p1Filtered, p2Filtered){
-  const combined = buildCombined(p1Filtered, p2Filtered, r=>r.buucuc);
-  const rows = sortRows(combined);
+function renderBuuCucTable(combinedPrecomputed){
+  const rows = sortRows(combinedPrecomputed);
   const table = document.getElementById('mainTable');
   const hasP2 = true; // Kỳ 2 luôn có nguồn dữ liệu (file riêng hoặc cùng file Kỳ 1)
   table.innerHTML = `
@@ -1239,38 +1436,23 @@ document.getElementById('btnExport').addEventListener('click', ()=>{
 // ===================== BÁO CÁO TỔNG THỂ (Excel / Word / PDF) =====================
 
 function buildReportData(){
-  const { p1Filtered, p2Filtered } = computeFilteredData();
-
-  const custAttrMap = computeCustomerAttributes(p1Filtered.concat(p2Filtered));
-  const custCombined = buildCombined(p1Filtered, p2Filtered, r=>r.cust)
-    .map(r=>({
-      ...r,
-      classify: classifyCustomer(r),
-      hoTen: (custAttrMap.get(r.key) && custAttrMap.get(r.key).hoTen) || '',
-      buucucRep: (custAttrMap.get(r.key) && custAttrMap.get(r.key).buucuc) || ''
-    }));
-  const customers = sortRows2(custCombined, 'p1_rev');
-
-  const services = sortRows2(buildCombined(p1Filtered, p2Filtered, r=>r.nhom), 'p1_rev');
-  const buucuc = sortRows2(buildCombined(p1Filtered, p2Filtered, r=>r.buucuc), 'p1_rev');
-
-  const sum1 = p1Filtered.reduce((a,r)=>a+r.tongCuoc,0);
-  const sum2 = p2Filtered.reduce((a,r)=>a+r.tongCuoc,0);
-  const cust1Set = new Set(p1Filtered.map(r=>r.cust));
-  const cust2Set = new Set(p2Filtered.map(r=>r.cust));
-  const common = [...cust1Set].filter(c=>cust2Set.has(c)).length;
-
+  const lc = state.lastCompute;
+  if(!lc){
+    return {
+      p1Name:'', p2Name:'', p1Range:'', p2Range:'',
+      summary:{sum1:0,cnt1:0,cust1:0,sum2:0,cnt2:0,cust2:0,delta:0,common:0},
+      customers:[], services:[], buucuc:[]
+    };
+  }
   return {
     p1Name: `Nguồn: ${state.dataFiles.length} file dữ liệu đã nạp`,
     p2Name: `Nguồn: ${state.dataFiles.length} file dữ liệu đã nạp`,
     p1Range: `${state.filters.p1From} → ${state.filters.p1To}`,
     p2Range: `${state.filters.p2From} → ${state.filters.p2To}`,
-    summary: {
-      sum1, cnt1: p1Filtered.length, cust1: cust1Set.size,
-      sum2, cnt2: p2Filtered.length, cust2: cust2Set.size,
-      delta: sum2 - sum1, common
-    },
-    customers, services, buucuc
+    summary: lc.summary,
+    customers: sortRows2(lc.customers, 'p1_rev'),
+    services: sortRows2(lc.services, 'p1_rev'),
+    buucuc: sortRows2(lc.buucuc, 'p1_rev')
   };
 }
 
