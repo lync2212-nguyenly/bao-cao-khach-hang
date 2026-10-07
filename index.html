@@ -596,10 +596,33 @@ function parseFileRows(fileOrBuffer, columns){
 }
 
 function ngayPHtoDate(v){
+  if(v===null || v===undefined || v==='') return null;
+
+  // Trường hợp 1: số nguyên dạng YYYYMMDD (ví dụ 20260701) — kiểu cũ, phổ biến nhất
   const s = String(v).trim();
-  if(s.length !== 8) return null;
-  const y = s.slice(0,4), m = s.slice(4,6), d = s.slice(6,8);
-  return `${y}-${m}-${d}`;
+  if(/^\d{8}$/.test(s)){
+    const y = s.slice(0,4), m = Number(s.slice(4,6)), d = Number(s.slice(6,8));
+    if(m>=1 && m<=12 && d>=1 && d<=31){
+      return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    }
+  }
+
+  // Trường hợp 2: cột được định dạng kiểu Ngày tháng (Date) thật trong Excel — khi đọc "thô" (raw)
+  // sẽ ra số thứ tự ngày (serial date, ví dụ ~46000 cho năm 2026), KHÔNG phải số YYYYMMDD,
+  // dù khi mở bằng Excel vẫn hiển thị đẹp mắt kiểu "20261001" do định dạng số tuỳ chỉnh.
+  const num = Number(v);
+  if(!isNaN(num) && num > 20000 && num < 80000){
+    const utcDays = Math.floor(num - 25569); // quy đổi mốc gốc Excel (1899-12-30) sang mốc gốc Unix (1970-01-01)
+    const dateObj = new Date(utcDays * 86400 * 1000);
+    if(!isNaN(dateObj.getTime())){
+      const y = dateObj.getUTCFullYear();
+      const m = String(dateObj.getUTCMonth()+1).padStart(2,'0');
+      const d = String(dateObj.getUTCDate()).padStart(2,'0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  return null;
 }
 
 async function processMappingRows(rows, displayName, statusId){
