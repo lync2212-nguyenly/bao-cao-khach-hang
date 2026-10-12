@@ -173,10 +173,31 @@
 
     <div class="summary-grid" id="summaryGrid"></div>
 
+    <div class="panel" id="overviewPanel">
+      <div class="toolbar">
+        <div>
+          <h3 style="font-size:15px;">Bảng đánh giá tổng thể</h3>
+          <div class="note" style="margin-top:2px;">Doanh thu theo nhóm dịch vụ, đơn vị: triệu đồng — theo đúng bộ lọc và 2 khoảng ngày đang chọn.</div>
+        </div>
+        <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="filter-block" style="min-width:110px;">
+            <label>Tên cột Kỳ 1</label>
+            <input type="text" id="ovLabel1" value="Kỳ 1" style="padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; width:120px;">
+          </div>
+          <div class="filter-block" style="min-width:110px;">
+            <label>Tên cột Kỳ 2</label>
+            <input type="text" id="ovLabel2" value="Kỳ 2" style="padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; width:120px;">
+          </div>
+        </div>
+      </div>
+      <div class="table-scroll" style="max-height:none;"><table id="overviewTable"></table></div>
+      <div class="note">Truyền thống trong nước gồm cả nhóm TT và HCC. Tổng bưu chính là tổng cộng các dòng bên dưới (đã làm tròn đến triệu đồng nên cộng tay vẫn khớp).</div>
+    </div>
+
     <div class="panel" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div>
         <h3 style="font-size:15px;">Xuất báo cáo tổng thể</h3>
-        <div class="note" style="margin-top:2px;">Gồm: Tổng quan, Theo khách hàng, Theo nhóm dịch vụ, Theo bưu cục gửi — theo đúng bộ lọc đang áp dụng.</div>
+        <div class="note" style="margin-top:2px;">Gồm: Tổng quan, Đánh giá tổng thể, Theo khách hàng, Theo nhóm dịch vụ, Theo bưu cục gửi — theo đúng bộ lọc đang áp dụng.</div>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="btnExportExcel">Xuất Excel (.xlsx)</button>
@@ -291,6 +312,7 @@ const state = {
   serviceView: 'group',
   sort: { key:'p1_rev', dir:-1 },
   expanded: new Set(),
+  ovLabels: { p1: 'Kỳ 1', p2: 'Kỳ 2' },   // tên cột hiển thị trong Bảng đánh giá tổng thể (vd: Tuần 38 / Tuần 39)
   lastCompute: null,   // kết quả tính toán gần nhất từ compute worker (dùng lại cho xuất báo cáo)
   totalRows: 0
 };
@@ -1162,6 +1184,7 @@ async function renderAll(){
   state.lastCompute = result; // dùng lại cho Xuất Excel/Word/PDF, không cần tính lại
 
   renderSummary(result.summary);
+  renderOverview();
 
   const legend = document.getElementById('legendBox');
   legend.innerHTML = `
@@ -1175,6 +1198,87 @@ async function renderAll(){
   else if(state.tab==='buucuc') renderBuuCucTable(result.buucuc);
   else renderKhlTab(result.customers);
 }
+
+// ===================== BẢNG ĐÁNH GIÁ TỔNG THỂ (doanh thu, triệu đồng) =====================
+// Nguồn: mảng "services" (gộp theo nhóm dịch vụ) do worker tính sẵn. Dùng chung cho web, Excel, Word, PDF.
+function buildOverviewRows(services){
+  const norm = s => String(s===null||s===undefined ? '' : s).trim().toUpperCase();
+  const toM = v => Math.round(v / 1e6);
+  const groups = [
+    { label: 'Truyền thống trong nước', keys: ['TT', 'HCC'] },
+    { label: 'TMĐT',                    keys: ['TMĐT'] },
+    { label: 'Quốc tế',                 keys: ['QT'] }
+  ];
+  const used = new Set(groups.flatMap(g => g.keys));
+
+  const rows = groups.map(g => {
+    let a = 0, b = 0;
+    services.forEach(s => { if(g.keys.includes(norm(s.key))){ a += s.p1_rev; b += s.p2_rev; } });
+    return { label: g.label, p1: toM(a), p2: toM(b) };
+  });
+
+  // Nhóm ngoài 3 nhóm trên (vd: "Khác", "Chưa xác định") — chỉ hiện khi có doanh thu, để bảng luôn cộng đủ
+  let oa = 0, ob = 0;
+  services.forEach(s => { if(!used.has(norm(s.key))){ oa += s.p1_rev; ob += s.p2_rev; } });
+  if(oa !== 0 || ob !== 0) rows.push({ label: 'Khác / chưa phân loại', p1: toM(oa), p2: toM(ob) });
+
+  const total = { label: 'Tổng bưu chính', p1: rows.reduce((x, r) => x + r.p1, 0), p2: rows.reduce((x, r) => x + r.p2, 0), isTotal: true };
+  const all = [total].concat(rows);
+  all.forEach(r => {
+    r.delta = r.p2 - r.p1;
+    r.ratio = r.p1 === 0 ? null : r.p2 / r.p1;   // Kỳ 2 / Kỳ 1 (vd 0.97 = 97%)
+  });
+  return all;
+}
+
+function fmtGroup(n){ return String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+function fmtMillion(n){ return (n < 0 ? '−' : '') + fmtGroup(n); }
+function fmtDeltaM(n){ return n > 0 ? '+' + fmtGroup(n) : (n < 0 ? '−' + fmtGroup(n) : '0'); }
+function fmtRatio(r){ return r === null ? '—' : Math.round(r * 100) + '%'; }
+function fmtDMY(iso){ return iso ? iso.split('-').reverse().join('/') : ''; }
+
+function overviewLabels(){
+  return {
+    l1: (state.ovLabels.p1 || 'Kỳ 1').trim() || 'Kỳ 1',
+    l2: (state.ovLabels.p2 || 'Kỳ 2').trim() || 'Kỳ 2'
+  };
+}
+
+function renderOverview(){
+  const table = document.getElementById('overviewTable');
+  if(!state.lastCompute){ table.innerHTML = ''; return; }
+  const rows = buildOverviewRows(state.lastCompute.services);
+  const { l1, l2 } = overviewLabels();
+  const sub = (a, b) => `<br><span style="font-weight:400; text-transform:none; letter-spacing:0; font-size:11px;">${fmtDMY(a)} → ${fmtDMY(b)}</span>`;
+  table.innerHTML = `
+    <thead><tr>
+      <th style="cursor:default;">Chỉ tiêu</th>
+      <th style="cursor:default;">${l1}${sub(state.filters.p1From, state.filters.p1To)}</th>
+      <th style="cursor:default;">${l2}${sub(state.filters.p2From, state.filters.p2To)}</th>
+      <th style="cursor:default;">Tăng/giảm</th>
+      <th style="cursor:default;">% ${l2}/${l1}</th>
+    </tr></thead>
+    <tbody>
+    ${rows.map(r => {
+      const up = r.delta >= 0;
+      const ratioUp = r.ratio !== null && r.ratio >= 1;
+      return `<tr style="${r.isTotal ? 'font-weight:700; background:#F1EFE7;' : ''}">
+        <td>${r.label}</td>
+        <td class="mono">${fmtMillion(r.p1)}</td>
+        <td class="mono">${fmtMillion(r.p2)}</td>
+        <td class="mono ${up ? 'pos' : 'neg'}">${fmtDeltaM(r.delta)}</td>
+        <td class="mono ${r.ratio === null ? '' : (ratioUp ? 'pos' : 'neg')}">${fmtRatio(r.ratio)}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>`;
+}
+
+['ovLabel1', 'ovLabel2'].forEach((id, i) => {
+  document.getElementById(id).addEventListener('input', e => {
+    state.ovLabels[i === 0 ? 'p1' : 'p2'] = e.target.value;
+    renderOverview();   // chỉ vẽ lại bảng từ kết quả đã tính, không tính lại dữ liệu
+  });
+});
 
 function renderSummary(summary){
   const { sum1, cnt1, cust1, sum2, cnt2, cust2, delta, common } = summary;
@@ -1499,7 +1603,8 @@ function buildReportData(){
     return {
       p1Name:'', p2Name:'', p1Range:'', p2Range:'',
       summary:{sum1:0,cnt1:0,cust1:0,sum2:0,cnt2:0,cust2:0,delta:0,common:0},
-      customers:[], services:[], buucuc:[]
+      customers:[], services:[], buucuc:[],
+      overview:[], ovLabels:{l1:'Kỳ 1', l2:'Kỳ 2'}
     };
   }
   return {
@@ -1510,7 +1615,9 @@ function buildReportData(){
     summary: lc.summary,
     customers: sortRows2(lc.customers, 'p1_rev'),
     services: sortRows2(lc.services, 'p1_rev'),
-    buucuc: sortRows2(lc.buucuc, 'p1_rev')
+    buucuc: sortRows2(lc.buucuc, 'p1_rev'),
+    overview: buildOverviewRows(lc.services),
+    ovLabels: overviewLabels()
   };
 }
 
@@ -1531,6 +1638,25 @@ document.getElementById('btnExportExcel').addEventListener('click', ()=>{
     ['Khách hàng chung 2 kỳ', d.summary.common, '', '']
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryAoa), 'Tong quan');
+
+  // Sheet đánh giá tổng thể (doanh thu, triệu đồng)
+  const ovL = d.ovLabels;
+  const ovAoa = [
+    ['ĐÁNH GIÁ TỔNG THỂ — Doanh thu (triệu đồng)'],
+    [],
+    ['Chỉ tiêu', ovL.l1 + ' (' + d.p1Range + ')', ovL.l2 + ' (' + d.p2Range + ')', 'Tăng/giảm', '% ' + ovL.l2 + '/' + ovL.l1]
+  ].concat(d.overview.map(r => [r.label, r.p1, r.p2, r.delta, r.ratio === null ? '' : r.ratio]));
+  const ovWs = XLSX.utils.aoa_to_sheet(ovAoa);
+  d.overview.forEach((r, i) => {            // dòng dữ liệu bắt đầu từ hàng thứ 4 (chỉ số 3)
+    const cell = ovWs[XLSX.utils.encode_cell({ r: 3 + i, c: 4 })];
+    if(cell && typeof cell.v === 'number'){ cell.t = 'n'; cell.z = '0%'; }
+    [1, 2, 3].forEach(c => {
+      const cc = ovWs[XLSX.utils.encode_cell({ r: 3 + i, c })];
+      if(cc){ cc.z = '#,##0;-#,##0'; }
+    });
+  });
+  ovWs['!cols'] = [{ wch: 28 }, { wch: 26 }, { wch: 26 }, { wch: 14 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, ovWs, 'Danh gia tong the');
 
   const custAoa = [['MaKhachHangTCT','HoTenNguoiGoi','BuuCucGoi','DonKy1','DoanhThuKy1','DonKy2','DoanhThuKy2','ChenhLech','PhanTramThayDoi','BienDong']]
     .concat(d.customers.map(r=>[r.key, r.hoTen, r.buucucRep, r.p1_orders, r.p1_rev, r.p2_orders, r.p2_rev, r.delta_rev, r.p1_rev ? ((r.delta_rev/r.p1_rev)*100).toFixed(1)+'%' : '', CLASSIFY_LABELS[r.classify]]));
@@ -1581,6 +1707,18 @@ function buildReportHTMLBody(d, opts){
       <tr><td>Số đơn</td><td style="text-align:right">${fmtNum(d.summary.cnt1)}</td><td style="text-align:right">${fmtNum(d.summary.cnt2)}</td><td style="text-align:right">${fmtNum(d.summary.cnt2-d.summary.cnt1)}</td></tr>
       <tr><td>Số khách hàng</td><td style="text-align:right">${fmtNum(d.summary.cust1)}</td><td style="text-align:right">${fmtNum(d.summary.cust2)}</td><td style="text-align:right">${fmtNum(d.summary.cust2-d.summary.cust1)}</td></tr>
       <tr><td>Khách hàng chung 2 kỳ</td><td colspan="3">${fmtNum(d.summary.common)}</td></tr>
+    </table>
+
+    <h2>Đánh giá tổng thể (doanh thu, triệu đồng)</h2>
+    <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%;">
+      <tr><th>Chỉ tiêu</th><th>${d.ovLabels.l1}<br>(${d.p1Range})</th><th>${d.ovLabels.l2}<br>(${d.p2Range})</th><th>Tăng/giảm</th><th>% ${d.ovLabels.l2}/${d.ovLabels.l1}</th></tr>
+      ${d.overview.map(r => `<tr${r.isTotal ? ' style="font-weight:bold; background:#EEEEEE;"' : ''}>
+        <td>${r.label}</td>
+        <td style="text-align:right">${fmtMillion(r.p1)}</td>
+        <td style="text-align:right">${fmtMillion(r.p2)}</td>
+        <td style="text-align:right">${fmtDeltaM(r.delta)}</td>
+        <td style="text-align:right">${fmtRatio(r.ratio)}</td>
+      </tr>`).join('')}
     </table>
 
     <h2>Theo nhóm dịch vụ</h2>
